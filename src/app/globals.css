@@ -1,0 +1,252 @@
+@import "@heroui/react/styles";
+@import "tailwindcss";
+
+/*
+ * HeroUI Theme Customization
+ * Add this to your global.css after importing @heroui/styles
+ * Only includes base variables from variables.css
+ * @see https://heroui.com/docs/react/getting-started/theming
+ */
+
+ :root,
+ .light,
+ .default,
+ [data-theme="light"],
+ [data-theme="default"] {
+   /* Theme Colors (Light Mode) */
+   --accent: oklch(62.04% 0.1950 253.83);
+   --accent-foreground: oklch(99.11% 0 0);
+   --background: oklch(95.50% 0.0120 60.00);
+   --border: oklch(90.00% 0.0015 253.83);
+   --danger: oklch(65.32% 0.2335 25.74);
+   --danger-foreground: oklch(99.11% 0 0);
+   --default: oklch(94.00% 0.0015 253.83);
+   --default-foreground: oklch(21.03% 0.0059 253.83);
+   --field-background: oklch(100.00% 0.0008 253.83);
+   --field-foreground: oklch(21.03% 0.0015 253.83);
+   --field-placeholder: oklch(55.17% 0.0030 253.83);
+   --focus: oklch(62.04% 0.1950 253.83);
+   --foreground: oklch(21.03% 0.0015 253.83);
+   --muted: oklch(55.17% 0.0030 253.83);
+   --overlay: oklch(100.00% 0.0004 253.83);
+   --overlay-foreground: oklch(21.03% 0.0015 253.83);
+   --scrollbar: oklch(87.10% 0.0015 253.83);
+   --segment: oklch(100.00% 0.0015 253.83);
+   --segment-foreground: oklch(21.03% 0.0015 253.83);
+   --separator: oklch(92.00% 0.0015 253.83);
+   --success: oklch(73.29% 0.1941 150.81);
+   --success-foreground: oklch(21.03% 0.0059 150.81);
+   --surface: oklch(100.00% 0.0008 253.83);
+   --surface-foreground: oklch(21.03% 0.0015 253.83);
+   --surface-secondary: oklch(95.24% 0.0012 253.83);
+   --surface-secondary-foreground: oklch(21.03% 0.0015 253.83);
+   --surface-tertiary: oklch(93.73% 0.0012 253.83);
+   --surface-tertiary-foreground: oklch(21.03% 0.0015 253.83);
+   --warning: oklch(78.19% 0.1590 72.33);
+   --warning-foreground: oklch(21.03% 0.0059 72.33);
+ 
+   /* Border Radius */
+   --radius: 0.5rem;
+   --field-radius: 0.75rem;
+ 
+   /* Font Family */
+   /* Make sure to load Inter font in your app */
+   --font-sans: var(--font-inter);
+ }
+ 
+ .dark,
+[data-theme="dark"] {
+  color-scheme: dark;
+  /* Theme Colors (Dark Mode) — Softer, eye-friendly dark */
+  --accent: oklch(68.00% 0.1800 253.83);
+  --accent-foreground: oklch(99.11% 0 0);
+  --background: oklch(18.00% 0.0040 260.00);
+  --border: oklch(28.00% 0.0060 260.00);
+  --danger: oklch(62.00% 0.2100 25.00);
+  --danger-foreground: oklch(99.11% 0 0);
+  --default: oklch(24.00% 0.0050 260.00);
+  --default-foreground: oklch(94.00% 0.0020 260.00);
+  --field-background: oklch(22.00% 0.0050 260.00);
+  --field-foreground: oklch(92.00% 0.0020 260.00);
+  --field-placeholder: oklch(52.00% 0.0040 260.00);
+  --focus: oklch(68.00% 0.1800 253.83);
+  --foreground: oklch(94.00% 0.0020 260.00);
+  --muted: oklch(58.00% 0.0040 260.00);
+  --overlay: oklch(16.00% 0.0050 260.00);
+  --overlay-foreground: oklch(94.00% 0.0020 260.00);
+  --scrollbar: oklch(32.00% 0.0040 260.00);
+  --segment: oklch(22.00% 0.0050 260.00);
+  --segment-foreground: oklch(94.00% 0.0020 260.00);
+  --separator: oklch(26.00% 0.0050 260.00);
+  --success: oklch(73.29% 0.1941 150.81);
+  --success-foreground: oklch(21.03% 0.0059 150.81);
+  --surface: oklch(22.00% 0.0050 260.00);
+  --surface-foreground: oklch(94.00% 0.0020 260.00);
+  --surface-secondary: oklch(26.00% 0.0040 260.00);
+  --surface-secondary-foreground: oklch(94.00% 0.0020 260.00);
+  --surface-tertiary: oklch(30.00% 0.0040 260.00);
+  --surface-tertiary-foreground: oklch(94.00% 0.0020 260.00);
+  --warning: oklch(82.03% 0.1392 76.34);
+  --warning-foreground: oklch(21.03% 0.0059 76.34);
+} 
+* {
+  box-sizing: border-box;
+}
+
+html {
+  /* Clip any horizontal overflow at document level — prevents page-level
+     horizontal scrollbar when inner containers use overflow-x: auto */
+  overflow-x: clip;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), Arial, sans-serif;
+  overflow-x: clip;
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* ── Global scrollbar — matches app theme ───────────────────────────
+ * Applied to the main scroll container (the inner flex column in
+ * app-shell) and any overflow-y-auto element in the app.
+ * Uses CSS variables so it automatically switches light ↔ dark.
+ * ──────────────────────────────────────────────────────────────────── */
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar) transparent;
+}
+
+/* Chromium / Safari */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar);
+  border-radius: 99px;
+  border: 1px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: oklch(from var(--scrollbar) calc(l - 0.06) c h);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Thin styled scrollbar for column task lists */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar) transparent;
+}
+.scrollbar-thin::-webkit-scrollbar { width: 5px; }
+.scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: var(--scrollbar);
+  border-radius: 99px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background: oklch(from var(--scrollbar) calc(l - 0.06) c h);
+}
+
+/* ─── View Transitions ─── */
+
+/* ── Brand icon shared-element morph: splash → sidebar ──────────────
+ * The J icon has view-transition-name="brand-icon" in the splash and
+ * in the sidebar (only one active at a time).  The browser treats it
+ * as a single element morphing across the layout change.
+ * The group animation drives position + size; old/new images have no
+ * cross-fade (instant swap) so the morph looks clean.
+ * ──────────────────────────────────────────────────────────────────── */
+::view-transition-group(brand-icon) {
+  animation-duration: 600ms;
+  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+::view-transition-old(brand-icon) {
+  /* no cross-fade — just let the group morph handle it */
+  animation-duration: 1ms;
+}
+::view-transition-new(brand-icon) {
+  animation-duration: 1ms;
+}
+
+/* Kanban card — enter/exit when filter changes */
+::view-transition-old(.vt-card) {
+  animation: 110ms cubic-bezier(0.4, 0, 1, 1) both vt-card-out;
+}
+::view-transition-new(.vt-card) {
+  animation: 220ms cubic-bezier(0, 0, 0.2, 1) 30ms both vt-card-in;
+}
+@keyframes vt-card-out {
+  from { opacity: 1; transform: scale(1) translateY(0); }
+  to   { opacity: 0; transform: scale(0.96) translateY(-4px); }
+}
+@keyframes vt-card-in {
+  from { opacity: 0; transform: scale(0.97) translateY(6px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+/* Page cross-fade with gentle drift — for lateral (sidebar) navigation */
+::view-transition-old(.vt-page) {
+  animation: 150ms cubic-bezier(0.4, 0, 1, 1) both vt-exit;
+}
+::view-transition-new(.vt-page) {
+  animation: 300ms cubic-bezier(0.0, 0, 0.2, 1) 80ms both vt-enter;
+}
+
+@keyframes vt-exit {
+  from {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.99) translateY(4px);
+  }
+}
+
+@keyframes vt-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.99) translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* Sheet overlay */
+@keyframes vt-sheet-overlay {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::view-transition-old(*),
+  ::view-transition-new(*),
+  ::view-transition-group(*) {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
