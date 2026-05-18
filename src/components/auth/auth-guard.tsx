@@ -5,7 +5,6 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
 
 const AUTH_PATHS = ["/login", "/register"];
-const PUBLIC_PATHS = ["/"];
 
 function isAuthRoute(pathname: string): boolean {
   return AUTH_PATHS.some(
@@ -13,15 +12,16 @@ function isAuthRoute(pathname: string): boolean {
   );
 }
 
-function isPublicRoute(pathname: string): boolean {
-  return PUBLIC_PATHS.some((p) => pathname === p);
-}
-
 /**
- * Guards routes based on authentication state:
- * - Protected routes → redirect to /login if not authenticated
- * - Auth routes → redirect to /workspace if already authenticated
- * - Shows a loading spinner while session is being restored
+ * Клиентская страховка после `middleware.ts`.
+ *
+ * Middleware уже:
+ *   - 404'ит защищённые маршруты для не-авторизованных
+ *   - редиректит авторизованных с /login и /register на /workspace
+ *
+ * Этот guard нужен только для клиентских переходов состояния
+ * (например, авто-логин после регистрации, или внешняя смена auth-state),
+ * когда middleware уже не сработает.
  */
 export function AuthGuard({ children }: { children: ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
@@ -30,40 +30,13 @@ export function AuthGuard({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (isLoading) return;
-
-    // Authenticated user on login/register → send to workspace
     if (isAuthenticated && isAuthRoute(pathname)) {
       router.replace("/workspace");
-      return;
-    }
-
-    // Unauthenticated user on protected route → send to login
-    if (!isAuthenticated && !isAuthRoute(pathname) && !isPublicRoute(pathname)) {
-      router.replace("/login");
     }
   }, [isAuthenticated, isLoading, pathname, router]);
 
-  // While restoring session, show minimal loader
-  if (isLoading) {
-    return (
-      <div className="flex h-screen w-screen items-center justify-center bg-[var(--background)]">
-        <div className="flex flex-col items-center gap-3">
-          <div className="h-8 w-8 animate-spin rounded-full border-2 border-accent border-t-transparent" />
-          <p className="text-sm text-[var(--muted)]">Loading…</p>
-        </div>
-      </div>
-    );
-  }
-
-  // Don't render protected content until redirect completes
-  if (!isAuthenticated && !isAuthRoute(pathname) && !isPublicRoute(pathname)) {
-    return null;
-  }
-
-  // Don't render auth pages for authenticated users
-  if (isAuthenticated && isAuthRoute(pathname)) {
-    return null;
-  }
-
+  // Промежуточное состояние «у клиента ещё нет user, но cookie была на сервере».
+  // Случается редко и кратко (stale access + жив refresh) — показываем дочерний контент,
+  // т.к. middleware и pre-fetch уже подтвердили доступ к маршруту.
   return <>{children}</>;
 }

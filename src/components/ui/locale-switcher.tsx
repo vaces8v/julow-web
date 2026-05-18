@@ -28,8 +28,22 @@ export function LocaleSwitcher({ variant = "app" }: { variant?: LocaleSwitcherVa
     });
   }, []);
 
+  /**
+   * Меню портируем в body для вариантов `landing` И `auth`, потому что
+   * на auth-страницах `<header>` и `<main>` оба имеют `relative z-10`
+   * и создают независимые stacking-context'ы. Inline-`absolute z-50`
+   * внутри header'а оказывается заперт внутри его контекста и
+   * перекрывается main'ом (одинаковый z, main позже в DOM → выигрывает).
+   * Это создавало эффект «попап не открывается» — он открывался, но был
+   * визуально скрыт под main, а клик «снаружи» закрывал его обратно.
+   *
+   * Для `app` варианта (внутри сайдбара) такой проблемы нет — там
+   * inline-absolute продолжает работать.
+   */
+  const usesPortal = variant === "landing" || variant === "auth";
+
   useLayoutEffect(() => {
-    if (!open || variant !== "landing") {
+    if (!open || !usesPortal) {
       if (!open) setMenuPos(null);
       return;
     }
@@ -40,7 +54,7 @@ export function LocaleSwitcher({ variant = "app" }: { variant?: LocaleSwitcherVa
       window.removeEventListener("scroll", updatePosition, true);
       window.removeEventListener("resize", updatePosition);
     };
-  }, [open, variant, updatePosition]);
+  }, [open, usesPortal, updatePosition]);
 
   useEffect(() => {
     if (!open) return;
@@ -56,7 +70,11 @@ export function LocaleSwitcher({ variant = "app" }: { variant?: LocaleSwitcherVa
 
   const btnCls =
     variant === "landing"
-      ? "flex h-full min-h-0 w-9 shrink-0 items-center justify-center rounded-l-[10px] text-[11px] font-bold uppercase tracking-[0.08em] text-[var(--foreground)] transition-colors hover:bg-[color-mix(in_oklch,var(--foreground)_10%,transparent)]"
+      // Landing всегда на светлом zinc-50 фоне независимо от системной темы
+      // (см. `MarketingLanding`), поэтому `text-[var(--foreground)]` ломался
+      // на dark-теме (--foreground становился белым → текст «RU» сливался
+      // с белой подложкой). Хардкодим zinc-900.
+      ? "flex h-full min-h-0 w-9 shrink-0 items-center justify-center rounded-l-[10px] text-[11px] font-bold uppercase tracking-[0.08em] text-zinc-900 transition-colors hover:bg-zinc-900/10"
       : variant === "auth"
         ? "flex h-9 items-center gap-1 rounded-xl border border-[var(--border)]/80 bg-[var(--surface)]/80 px-2.5 text-[12px] font-semibold text-[var(--foreground)] shadow-sm backdrop-blur-sm transition-colors hover:bg-[var(--surface-secondary)]"
         : "flex h-8 w-8 items-center justify-center rounded-lg text-[11px] font-bold text-[var(--muted)] transition-colors hover:bg-[var(--surface-secondary)] hover:text-[var(--foreground)]";
@@ -81,9 +99,13 @@ export function LocaleSwitcher({ variant = "app" }: { variant?: LocaleSwitcherVa
     </button>
   ));
 
-  let menu = null;
+  let menu: React.ReactNode = null;
   if (open) {
-    if (variant === "landing" && menuPos) {
+    if (usesPortal && menuPos) {
+      // Портал в body: `fixed` + координаты от getBoundingClientRect.
+      // z-[9999] гарантирует, что меню перекроет любые stacking-контексты
+      // (включая <main className="relative z-10"> в AuthShell и аналогичные
+      // на лендинге).
       menu = (
         <div
           ref={menuRef}
@@ -97,7 +119,9 @@ export function LocaleSwitcher({ variant = "app" }: { variant?: LocaleSwitcherVa
           {menuItems}
         </div>
       );
-    } else if (variant !== "landing") {
+    } else if (!usesPortal) {
+      // Inline absolute — используется только для `app` варианта внутри
+      // сайдбара, где нет конкурирующих stacking-контекстов.
       menu = (
         <div ref={menuRef} className={`absolute right-0 top-full z-50 mt-1.5 ${menuClassName}`}>
           {menuItems}
@@ -119,7 +143,7 @@ export function LocaleSwitcher({ variant = "app" }: { variant?: LocaleSwitcherVa
         {SHORT[locale]}
       </button>
 
-      {variant === "landing" && menu && typeof document !== "undefined"
+      {usesPortal && menu && typeof document !== "undefined"
         ? createPortal(menu, document.body)
         : menu}
     </div>

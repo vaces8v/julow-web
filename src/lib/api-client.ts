@@ -1,39 +1,23 @@
 /**
- * Low-level API client for Julow Backend.
- * Handles base URL, auth headers, token refresh, and response unwrapping.
+ * Julow Web — клиентский HTTP-клиент.
+ *
+ * Архитектура:
+ *   Browser  →  /api/proxy/<path>   (Next BFF, добавляет Bearer-токен из httpOnly cookie)
+ *            →  /api/v1/<path>      (FastAPI)
+ *
+ * Клиент НЕ работает с токенами напрямую. Всё, что есть на клиенте — cookie
+ * `julow_access` и `julow_refresh`, которые недоступны JS (httpOnly).
+ *
+ * Авто-refresh на 401 происходит на уровне `/api/proxy/[...path]/route.ts`.
+ * Если refresh не удался, прокси возвращает 401 + очищает cookies, а клиент
+ * получает уведомление через `subscribeAuthFailure()`.
  */
 
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
+import { parseBackendError } from "@/lib/auth/error-codes";
 
-// ── Token storage ──────────────────────────────────────────────
+const PROXY_BASE = "/api/proxy";
 
-const TOKEN_KEY = "julow_access_token";
-const REFRESH_KEY = "julow_refresh_token";
-
-export function getAccessToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem(TOKEN_KEY);
-}
-
-export function getRefreshToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem(REFRESH_KEY);
-}
-
-export function setTokens(access: string, refresh: string): void {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(TOKEN_KEY, access);
-  localStorage.setItem(REFRESH_KEY, refresh);
-}
-
-export function clearTokens(): void {
-  if (typeof window === "undefined") return;
-  localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem(REFRESH_KEY);
-}
-
-// ── Response types ─────────────────────────────────────────────
+// ── Response типы ─────────────────────────────────────────────
 
 export interface SuccessResponse<T> {
   success: boolean;
@@ -48,193 +32,248 @@ export interface PaginatedResponse<T> {
   page_size: number;
 }
 
-export interface ErrorResponse {
-  success: false;
-  error:
-    | string
-    | {
-        code?: string;
-        message?: string;
-      };
-  detail?: string;
-  message?: string;
-}
+// ── Кастомная ошибка ──────────────────────────────────────────
 
 export class ApiError extends Error {
   status: number;
   code: string;
   detail?: string;
+  fieldErrors: Record<string, string>;
 
-  constructor(status: number, code: string, detail?: string) {
+  constructor(
+    status: number,
+    code: string,
+    detail?: string,
+    fieldErrors: Record<string, string> = {},
+  ) {
     super(detail ?? code);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
     this.detail = detail;
+    this.fieldErrors = fieldErrors;
   }
 }
 
-// ── Refresh logic ──────────────────────────────────────────────
+// ── Подписка на авторизационные сбои ──────────────────────────
 
-let refreshPromise: Promise<void> | null = null;
+type AuthFailureListener = (err: ApiError) => void;
+const authFailureListeners = new Set<AuthFailureListener>();
 
-function parseApiError(err: ErrorResponse | null): { code: string; detail?: string } {
-  if (!err) return { code: "UNKNOWN" };
-  if (typeof err.error === "string") {
-    return {
-      code: err.error,
-      detail: err.detail ?? err.message,
-    };
-  }
-  return {
-    code: err.error?.code ?? "UNKNOWN",
-    detail: err.detail ?? err.message ?? err.error?.message,
+/**
+ * Подписаться на 401 после неудачного refresh.
+ * AuthProvider использует это, чтобы сбросить in-memory user state и показать тост.
+ */
+export function subscribeAuthFailure(fn: AuthFailureListener): () => void {
+  authFailureListeners.add(fn);
+  return () => {
+    authFailureListeners.delete(fn);
   };
 }
 
-async function refreshAccessToken(): Promise<void> {
-  const rt = getRefreshToken();
-  if (!rt) {
-    clearTokens();
-    throw new ApiError(401, "NO_REFRESH_TOKEN");
-  }
-
-  const res = await fetch(`${API_BASE_URL}/auth/refresh`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ refresh_token: rt }),
+function emitAuthFailure(err: ApiError): void {
+  authFailureListeners.forEach((fn) => {
+    try {
+      fn(err);
+    } catch {
+      // не даём одному падающему листенеру сломать остальные
+    }
   });
-
-  if (!res.ok) {
-    clearTokens();
-    throw new ApiError(401, "REFRESH_FAILED");
-  }
-
-  const body: SuccessResponse<{
-    access_token: string;
-    refresh_token: string;
-  }> = await res.json();
-
-  setTokens(body.data.access_token, body.data.refresh_token);
 }
 
-// ── Core fetch ─────────────────────────────────────────────────
+// ── Низкоуровневый fetch ──────────────────────────────────────
 
 interface FetchOptions extends Omit<RequestInit, "body"> {
-  body?: Record<string, unknown>;
-  params?: Record<string, string>;
-  auth?: boolean;
+  body?: Record<string, unknown> | unknown[] | null;
+  params?: Record<string, string | number | boolean | undefined | null>;
 }
 
-async function apiFetch<T>(
-  path: string,
-  options: FetchOptions = {},
-): Promise<T> {
-  const { body, params, auth = true, ...init } = options;
-
-  // Build URL with query params
-  let url = `${API_BASE_URL}${path}`;
-  if (params) {
-    const qs = new URLSearchParams(params).toString();
-    if (qs) url += `?${qs}`;
+function buildQuery(params?: FetchOptions["params"]): string {
+  if (!params) return "";
+  const sp = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null) continue;
+    sp.set(k, String(v));
   }
+  const s = sp.toString();
+  return s ? `?${s}` : "";
+}
 
-  // Headers
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Accept: "application/json",
-  };
-  if (auth) {
-    const at = getAccessToken();
-    if (at) headers["Authorization"] = `Bearer ${at}`;
+async function apiFetch<T>(path: string, options: FetchOptions = {}): Promise<T> {
+  const { body, params, headers: optHeaders, ...init } = options;
+  const url = `${PROXY_BASE}${path.startsWith("/") ? path : `/${path}`}${buildQuery(params)}`;
+
+  const headers = new Headers(optHeaders);
+  if (!headers.has("Accept")) headers.set("Accept", "application/json");
+  if (body !== undefined && body !== null && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
   }
 
   const res = await fetch(url, {
     ...init,
-    headers: { ...headers, ...(init.headers as Record<string, string>) },
-    body: body ? JSON.stringify(body) : undefined,
+    headers,
+    body: body !== undefined && body !== null ? JSON.stringify(body) : undefined,
+    credentials: "same-origin", // cookies on same origin
+    cache: "no-store",
   });
 
-  // Auto-refresh on 401
-  if (res.status === 401 && auth && getRefreshToken()) {
-    if (!refreshPromise) {
-      refreshPromise = refreshAccessToken().finally(() => {
-        refreshPromise = null;
-      });
-    }
-    await refreshPromise;
-
-    // Retry with new token
-    const newAt = getAccessToken();
-    if (newAt) headers["Authorization"] = `Bearer ${newAt}`;
-
-    const retryRes = await fetch(url, {
-      ...init,
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-    });
-
-    if (!retryRes.ok) {
-      const err = await retryRes.json().catch(() => null);
-      const parsedError = parseApiError(err);
-      throw new ApiError(
-        retryRes.status,
-        parsedError.code,
-        parsedError.detail,
-      );
-    }
-
-    return retryRes.json();
-  }
-
   if (!res.ok) {
-    const err = await res.json().catch(() => null);
-    const parsedError = parseApiError(err);
-    throw new ApiError(
-      res.status,
-      parsedError.code,
-      parsedError.detail,
-    );
+    const errBody = await res.json().catch(() => null);
+    const parsed = parseBackendError(errBody);
+    const err = new ApiError(res.status, parsed.code, parsed.message, parsed.fieldErrors);
+    if (res.status === 401) {
+      emitAuthFailure(err);
+    }
+    throw err;
   }
 
-  return res.json();
+  // Некоторые ответы могут быть пустыми (204). На таких возвращаем undefined as T
+  if (res.status === 204) return undefined as unknown as T;
+  const ct = res.headers.get("content-type") ?? "";
+  if (!ct.includes("application/json")) return undefined as unknown as T;
+  return (await res.json()) as T;
 }
 
-// ── Convenience wrappers ───────────────────────────────────────
+// ── Удобные обёртки ───────────────────────────────────────────
 
-export async function apiGet<T>(path: string, params?: Record<string, string>) {
+export async function apiGet<T>(
+  path: string,
+  params?: FetchOptions["params"],
+): Promise<SuccessResponse<T>> {
   return apiFetch<SuccessResponse<T>>(path, { method: "GET", params });
 }
 
 export async function apiGetPaginated<T>(
   path: string,
-  params?: Record<string, string>,
-) {
+  params?: FetchOptions["params"],
+): Promise<PaginatedResponse<T>> {
   return apiFetch<PaginatedResponse<T>>(path, { method: "GET", params });
 }
 
 export async function apiPost<T>(
   path: string,
-  body?: Record<string, unknown>,
-  options?: Pick<FetchOptions, "auth">,
-) {
-  return apiFetch<SuccessResponse<T>>(path, {
-    method: "POST",
-    body,
-    ...options,
-  });
+  body?: Record<string, unknown> | unknown[] | null,
+): Promise<SuccessResponse<T>> {
+  return apiFetch<SuccessResponse<T>>(path, { method: "POST", body });
 }
 
 export async function apiPatch<T>(
   path: string,
-  body?: Record<string, unknown>,
-) {
-  return apiFetch<SuccessResponse<T>>(path, {
-    method: "PATCH",
-    body,
+  body?: Record<string, unknown> | unknown[] | null,
+): Promise<SuccessResponse<T>> {
+  return apiFetch<SuccessResponse<T>>(path, { method: "PATCH", body });
+}
+
+export async function apiPut<T>(
+  path: string,
+  body?: Record<string, unknown> | unknown[] | null,
+): Promise<SuccessResponse<T>> {
+  return apiFetch<SuccessResponse<T>>(path, { method: "PUT", body });
+}
+
+export async function apiDelete<T = void>(path: string): Promise<SuccessResponse<T>> {
+  return apiFetch<SuccessResponse<T>>(path, { method: "DELETE" });
+}
+
+/**
+ * POST с `multipart/form-data` (загрузка файлов).
+ * НЕ выставляем `Content-Type` — браузер сам подставит boundary.
+ * Идёт через тот же `/api/proxy`, поэтому accessToken добавляется автоматически.
+ */
+export async function apiPostMultipart<T>(
+  path: string,
+  form: FormData,
+): Promise<SuccessResponse<T>> {
+  const url = `${PROXY_BASE}${path.startsWith("/") ? path : `/${path}`}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { Accept: "application/json" },
+    body: form,
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => null);
+    const parsed = parseBackendError(errBody);
+    const err = new ApiError(res.status, parsed.code, parsed.message, parsed.fieldErrors);
+    if (res.status === 401) emitAuthFailure(err);
+    throw err;
+  }
+  if (res.status === 204) return { success: true, data: undefined as unknown as T };
+  return (await res.json()) as SuccessResponse<T>;
+}
+
+// ── Auth-эндпоинты на уровне Next BFF ─────────────────────────
+
+/**
+ * Эти 4 функции — единственный способ для клиента говорить с auth-flow.
+ * Все они вызывают Next route handlers `/api/auth/*`, которые работают с cookies.
+ */
+export async function authLogin(payload: {
+  email: string;
+  password: string;
+  isRememberMe?: boolean;
+}): Promise<{ user: import("@/lib/auth/types").AuthUser }> {
+  const res = await fetch("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(payload),
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    const parsed = parseBackendError(body);
+    throw new ApiError(res.status, parsed.code, parsed.message, parsed.fieldErrors);
+  }
+  const json = (await res.json()) as { success: true; data: { user: import("@/lib/auth/types").AuthUser } };
+  return json.data;
+}
+
+export async function authRegister(payload: {
+  email: string;
+  password: string;
+}): Promise<{ user: import("@/lib/auth/types").AuthUser }> {
+  const res = await fetch("/api/auth/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(payload),
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    const parsed = parseBackendError(body);
+    throw new ApiError(res.status, parsed.code, parsed.message, parsed.fieldErrors);
+  }
+  const json = (await res.json()) as { success: true; data: { user: import("@/lib/auth/types").AuthUser } };
+  return json.data;
+}
+
+export async function authLogout(): Promise<void> {
+  await fetch("/api/auth/logout", {
+    method: "POST",
+    credentials: "same-origin",
+    cache: "no-store",
   });
 }
 
-export async function apiDelete<T>(path: string) {
-  return apiFetch<SuccessResponse<T>>(path, { method: "DELETE" });
+export async function authMe(): Promise<import("@/lib/auth/types").AuthUser | null> {
+  const res = await fetch("/api/auth/me", {
+    method: "GET",
+    headers: { Accept: "application/json" },
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  if (res.status === 401) return null;
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    const parsed = parseBackendError(body);
+    throw new ApiError(res.status, parsed.code, parsed.message, parsed.fieldErrors);
+  }
+  const json = (await res.json()) as {
+    success: true;
+    data: { user: import("@/lib/auth/types").AuthUser };
+  };
+  return json.data.user;
 }

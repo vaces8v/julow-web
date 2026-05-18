@@ -30,6 +30,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -47,6 +48,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useI18n } from "@/i18n/context";
+import { useWorkspaceShell } from "@/components/workspace-shell-context";
+import { api, type MeetingPayload } from "@/lib/api";
 
 const PARTICIPANTS = [
   { initials: "AK", name: "Alexey", color: "#3b82f6" },
@@ -486,9 +489,10 @@ function PeoplePanel({
 }
 
 export function MeetingsPage() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const m = t.meetings;
   const c = t.chats;
+  const { activeWorkspaceId } = useWorkspaceShell();
   type SidePanel = "chat" | "people" | null;
   const [sidePanel, setSidePanel] = useState<SidePanel>(null);
   const sideOpen = sidePanel !== null;
@@ -498,10 +502,112 @@ export function MeetingsPage() {
   const [newRoomOpen, setNewRoomOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [newRoomName, setNewRoomName] = useState("");
+  const [scheduleTitle, setScheduleTitle] = useState("");
   const [scheduleDateVal, setScheduleDateVal] = useState<CalendarDate | null>(null);
   const [scheduleTimeVal, setScheduleTimeVal] = useState<Time | null>(null);
   const isLg = useMediaQuery("(min-width: 1024px)");
   const timeZone = getLocalTimeZone();
+
+  // ── Real meetings state ──────────────────────────────────────
+  const [meetings, setMeetings] = useState<MeetingPayload[]>([]);
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.listMyMeetings().then((list) => {
+      if (cancelled) return;
+      setMeetings(list);
+    }).catch(() => { });
+    return () => { cancelled = true; };
+  }, [refreshKey]);
+
+  /**
+   * Делим митинги на upcoming/history по статусу. Завершённые/отменённые → история,
+   * остальные (`scheduled`, `in_progress`) → предстоящие. Дополнительная фильтрация
+   * по времени делалась бы здесь, но `Date.now()` в render считается impure.
+   */
+  const upcomingMeetings = useMemo(() => {
+    return meetings
+      .filter((mt) => {
+        const status = mt.status?.toLowerCase() ?? "";
+        return status !== "completed" && status !== "cancelled";
+      })
+      .sort((a, b) => (a.scheduledAt ?? "").localeCompare(b.scheduledAt ?? ""));
+  }, [meetings]);
+
+  const historyMeetings = useMemo(() => {
+    return meetings
+      .filter((mt) => {
+        const status = mt.status?.toLowerCase() ?? "";
+        return status === "completed" || status === "cancelled";
+      })
+      .sort((a, b) => (b.scheduledAt ?? "").localeCompare(a.scheduledAt ?? ""));
+  }, [meetings]);
+
+  const formatMeetingTime = useCallback((iso?: string) => {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    const tag = locale === "ru" ? "ru-RU" : locale === "de" ? "de-DE" : "en-US";
+    return d.toLocaleString(tag, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  }, [locale]);
+
+  const handleJoinMeeting = useCallback(async (meetingId: string) => {
+    try {
+      const join = await api.joinMeeting(meetingId);
+      if (join.joinUrl) window.open(join.joinUrl, "_blank", "noopener,noreferrer");
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const handleCreateInstantRoom = useCallback(async () => {
+    if (!activeWorkspaceId) return;
+    const title = newRoomName.trim() || m.newRoom;
+    try {
+      const meeting = await api.createMeeting({
+        workspaceId: activeWorkspaceId,
+        title,
+        meetingType: "instant",
+      });
+      setNewRoomName("");
+      setNewRoomOpen(false);
+      setRefreshKey((k) => k + 1);
+      // сразу открываем комнату, если бэкенд вернул join_url
+      void handleJoinMeeting(meeting.id);
+    } catch {
+      // ignore
+    }
+  }, [activeWorkspaceId, newRoomName, m.newRoom, handleJoinMeeting]);
+
+  const handleScheduleMeeting = useCallback(async () => {
+    if (!activeWorkspaceId || !scheduleDateVal) return;
+    const title = scheduleTitle.trim() || m.scheduleMeeting;
+    const time = scheduleTimeVal ?? new Time(9, 0);
+    // CalendarDate + Time → ISO в локальной TZ
+    const dt = new Date(
+      scheduleDateVal.year,
+      scheduleDateVal.month - 1,
+      scheduleDateVal.day,
+      time.hour,
+      time.minute,
+    );
+    try {
+      await api.createMeeting({
+        workspaceId: activeWorkspaceId,
+        title,
+        meetingType: "scheduled",
+        scheduledAt: dt.toISOString(),
+        durationMinutes: 30,
+      });
+      setScheduleTitle("");
+      setScheduleDateVal(null);
+      setScheduleTimeVal(null);
+      setScheduleOpen(false);
+      setRefreshKey((k) => k + 1);
+    } catch {
+      // ignore
+    }
+  }, [activeWorkspaceId, scheduleDateVal, scheduleTimeVal, scheduleTitle, m.scheduleMeeting]);
 
   const openChat = useCallback(() => {
     setSidePanel((p) => (p === "chat" ? null : "chat"));
@@ -551,7 +657,7 @@ export function MeetingsPage() {
         <div className="flex w-full min-w-0 items-start justify-between gap-3">
           <div className="min-w-0 flex-1 text-left">
             <Card.Title className="text-left text-sm font-semibold">{m.stageLabel}</Card.Title>
-            <Text variant="muted" className="m-0 mt-0.5 text-left text-xs">
+            <Text color="muted" className="m-0 mt-0.5 text-left text-xs">
               {m.stageHint}
             </Text>
           </div>
@@ -596,48 +702,57 @@ export function MeetingsPage() {
     <div className="flex min-h-0 w-full min-w-0 flex-col gap-2 overflow-hidden sm:gap-3">
       <AccordionBlock title={m.upcoming} open={upcomingOpen} onToggle={() => setUpcomingOpen((v) => !v)}>
         <div className="flex flex-col gap-1.5 p-2 sm:p-2.5">
-          {[
-            { title: m.room1Title, time: m.room1Time },
-            { title: m.room2Title, time: m.room2Time },
-          ].map((row) => (
-            <div
-              key={row.title}
-              className="flex items-center gap-2 rounded-lg border border-[var(--border)]/50 bg-[var(--surface-secondary)]/35 px-2.5 py-2 sm:gap-2.5 sm:rounded-xl sm:px-3 sm:py-2"
-            >
-              <div className="min-w-0 flex-1">
-                <p className="m-0 truncate text-xs font-semibold sm:text-sm">{row.title}</p>
-                <Text variant="muted" className="m-0 mt-0.5 text-[10px] sm:text-xs">
-                  {row.time}
-                </Text>
+          {upcomingMeetings.length === 0 ? (
+            <p className="m-0 px-1 py-2 text-[11px] text-[var(--muted)]">—</p>
+          ) : (
+            upcomingMeetings.map((row) => (
+              <div
+                key={row.id}
+                className="flex items-center gap-2 rounded-lg border border-[var(--border)]/50 bg-[var(--surface-secondary)]/35 px-2.5 py-2 sm:gap-2.5 sm:rounded-xl sm:px-3 sm:py-2"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="m-0 truncate text-xs font-semibold sm:text-sm">{row.title}</p>
+                  <Text color="muted" className="m-0 mt-0.5 text-[10px] sm:text-xs">
+                    {formatMeetingTime(row.scheduledAt)}
+                  </Text>
+                </div>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="h-8 shrink-0 px-2.5 text-xs sm:h-9"
+                  onPress={() => void handleJoinMeeting(row.id)}
+                >
+                  {m.join}
+                </Button>
               </div>
-              <Button size="sm" variant="secondary" className="h-8 shrink-0 px-2.5 text-xs sm:h-9">
-                {m.join}
-              </Button>
-            </div>
-          ))}
+            ))
+          )}
         </div>
       </AccordionBlock>
 
       <AccordionBlock title={m.history} open={historyOpen} onToggle={() => setHistoryOpen((v) => !v)}>
         <div className="max-h-[min(220px,40vh)] overflow-y-auto overscroll-contain p-1.5 sm:max-h-[min(260px,42vh)] sm:p-2">
-          {[
-            { title: m.hist1Title, meta: m.hist1Meta },
-            { title: m.hist2Title, meta: m.hist2Meta },
-          ].map((row) => (
-            <button
-              key={row.title}
-              type="button"
-              className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors hover:bg-[var(--surface-secondary)]/80 sm:gap-2.5 sm:rounded-xl sm:px-2.5"
-            >
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-accent/12 text-accent sm:h-8 sm:w-8 sm:rounded-lg">
-                <Call02Icon size={14} strokeWidth={1.8} />
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-xs font-medium sm:text-sm">{row.title}</span>
-                <span className="mt-0.5 block text-[10px] text-[var(--muted)] sm:text-xs">{row.meta}</span>
-              </span>
-            </button>
-          ))}
+          {historyMeetings.length === 0 ? (
+            <p className="m-0 px-2 py-2 text-[11px] text-[var(--muted)]">—</p>
+          ) : (
+            historyMeetings.map((row) => (
+              <button
+                key={row.id}
+                type="button"
+                className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors hover:bg-[var(--surface-secondary)]/80 sm:gap-2.5 sm:rounded-xl sm:px-2.5"
+              >
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-accent/12 text-accent sm:h-8 sm:w-8 sm:rounded-lg">
+                  <Call02Icon size={14} strokeWidth={1.8} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-xs font-medium sm:text-sm">{row.title}</span>
+                  <span className="mt-0.5 block text-[10px] text-[var(--muted)] sm:text-xs">
+                    {formatMeetingTime(row.scheduledAt)} · {row.status}
+                  </span>
+                </span>
+              </button>
+            ))
+          )}
         </div>
       </AccordionBlock>
     </div>
@@ -721,11 +836,14 @@ export function MeetingsPage() {
                   {t.common.cancel}
                 </Button>
               </DialogClose>
-              <DialogClose asChild>
-                <Button variant="primary" size="sm">
-                  {m.newRoomSubmit}
-                </Button>
-              </DialogClose>
+              <Button
+                variant="primary"
+                size="sm"
+                onPress={() => void handleCreateInstantRoom()}
+                isDisabled={!activeWorkspaceId}
+              >
+                {m.newRoomSubmit}
+              </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -735,6 +853,7 @@ export function MeetingsPage() {
           onOpenChange={(o) => {
             setScheduleOpen(o);
             if (!o) {
+              setScheduleTitle("");
               setScheduleDateVal(null);
               setScheduleTimeVal(null);
             }
@@ -745,6 +864,17 @@ export function MeetingsPage() {
               <DialogTitle>{m.scheduleDialogTitle}</DialogTitle>
               <DialogDescription>{m.scheduleDialogDesc}</DialogDescription>
             </DialogHeader>
+            <div className="grid gap-4 py-1">
+              <div className="grid min-w-0 gap-1.5">
+                <Label className="text-sm font-medium text-[var(--foreground)]">{m.newRoomNameLabel}</Label>
+                <Input
+                  value={scheduleTitle}
+                  onChange={(e) => setScheduleTitle(e.target.value)}
+                  placeholder={m.newRoomNamePlaceholder}
+                  aria-label={m.newRoomNameLabel}
+                />
+              </div>
+            </div>
             <div className="grid gap-4 py-1 sm:grid-cols-2">
               <div className="grid min-w-0 gap-1.5">
                 <Label className="text-sm font-medium text-[var(--foreground)]">{m.scheduleDateLabel}</Label>
@@ -779,11 +909,14 @@ export function MeetingsPage() {
                   {t.common.cancel}
                 </Button>
               </DialogClose>
-              <DialogClose asChild>
-                <Button variant="primary" size="sm">
-                  {m.scheduleSubmit}
-                </Button>
-              </DialogClose>
+              <Button
+                variant="primary"
+                size="sm"
+                onPress={() => void handleScheduleMeeting()}
+                isDisabled={!activeWorkspaceId || !scheduleDateVal}
+              >
+                {m.scheduleSubmit}
+              </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>

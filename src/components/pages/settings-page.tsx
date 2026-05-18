@@ -1,49 +1,69 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useClickEffect } from "@/components/click-effect-context";
-import { useI18n, type Locale } from "@/i18n/context";
-import { useWorkspaceShell } from "@/components/workspace-shell-context";
-import { api, type UserPayload, type WorkspaceMemberPayload } from "@/lib/api";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Button, Text } from "@heroui/react";
 import {
-  Cancel01Icon,
-  CheckmarkCircle02Icon,
-  CreditCardIcon,
-  GitBranchIcon,
-  Key01Icon,
-  Notification01Icon,
   Settings01Icon,
-  ShieldKeyIcon,
   UserGroupIcon,
   UserCircleIcon,
 } from "hugeicons-react";
+
+import { useClickEffect } from "@/components/click-effect-context";
+import { useI18n, type Locale } from "@/i18n/context";
+import { useWorkspaceShell } from "@/components/workspace-shell-context";
+import {
+  api,
+  type ProfilePayload,
+  type SessionPayload,
+  type UserPayload,
+  type WorkspaceMemberPayload,
+  type WorkspacePayload,
+} from "@/lib/api";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
-type Section =
-  | "general"
-  | "account"
-  | "members"
-  | "notifications"
-  | "integrations"
-  | "security"
-  | "billing";
+/**
+ * Страница настроек.
+ *
+ * Архитектура: три секции, каждая обращается к реальному backend:
+ *   - General  → PATCH /workspaces/{ws}            (имя/описание workspace)
+ *   - Account  → GET /profile/me + PATCH /profile/me/personal-info (bio)
+ *                + GET/DELETE /account/sessions (список и завершение сессий)
+ *   - Members  → GET /workspaces/{ws}/members     (read-only список)
+ *
+ * Поддержка deep-link через ?tab=<section> — работает для router.push
+ * из профиль-шторки в app-shell («Мой аккаунт» → ?tab=account).
+ *
+ * Раньше была вкладка Security с сменой пароля и списком сессий
+ * — смена пароля временно убрана, сессии переехали в Account.
+ */
 
-const NAV_ITEMS: { id: Section; labelKey: keyof ReturnType<typeof useI18n>["t"]["settings"]; icon: React.ElementType; badge?: string }[] = [
-  { id: "general",       labelKey: "generalTitle",   icon: Settings01Icon },
-  { id: "account",       labelKey: "accountTitle",   icon: UserCircleIcon },
-  { id: "members",       labelKey: "membersTitle",   icon: UserGroupIcon },
-  { id: "notifications", labelKey: "notifTitle",     icon: Notification01Icon, badge: "3" },
-  { id: "integrations",  labelKey: "integrTitle",    icon: GitBranchIcon },
-  { id: "security",      labelKey: "securityTitle",  icon: ShieldKeyIcon },
-  { id: "billing", labelKey: "billingTitle", icon: CreditCardIcon },
+type Section = "general" | "account" | "members";
+
+const NAV_ITEMS: ReadonlyArray<{
+  id: Section;
+  labelKey: keyof ReturnType<typeof useI18n>["t"]["settings"];
+  icon: React.ElementType;
+}> = [
+  { id: "general", labelKey: "generalTitle", icon: Settings01Icon },
+  { id: "account", labelKey: "accountTitle", icon: UserCircleIcon },
+  { id: "members", labelKey: "membersTitle", icon: UserGroupIcon },
 ];
 
-/* ── Shared primitives ── */
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+/* ── Shared primitives ───────────────────────────────────────── */
+
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="flex flex-col gap-1.5">
       <Label className="text-sm font-medium">{label}</Label>
@@ -53,7 +73,7 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
   );
 }
 
-function TextInput({ ...props }: React.InputHTMLAttributes<HTMLInputElement>) {
+function TextInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
       {...props}
@@ -62,267 +82,331 @@ function TextInput({ ...props }: React.InputHTMLAttributes<HTMLInputElement>) {
   );
 }
 
-function SelectInput({ options, ...props }: React.SelectHTMLAttributes<HTMLSelectElement> & { options: string[] }) {
+function TextArea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return (
-    <select
+    <textarea
       {...props}
-      className={`h-9 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 text-sm text-[var(--foreground)] focus:border-[var(--accent)]/60 focus:outline-none transition-colors appearance-none cursor-pointer ${props.className ?? ""}`}
-    >
-      {options.map((o) => <option key={o}>{o}</option>)}
-    </select>
+      className={`min-h-[88px] w-full resize-y rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 text-sm placeholder:text-[var(--muted)] focus:border-[var(--accent)]/60 focus:outline-none transition-colors ${props.className ?? ""}`}
+    />
   );
 }
 
-function initialsFrom(value: string) {
-  const parts = value.trim().split(/\s+/).filter(Boolean);
-  if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
-  return (parts[0]?.slice(0, 2) ?? "?").toUpperCase();
-}
-
-function SwitchRow({ label, description, defaultChecked = false }: { label: string; description?: string; defaultChecked?: boolean }) {
-  const [checked, setChecked] = useState(defaultChecked);
-  return (
-    <div className="flex items-start justify-between gap-4">
-      <div className="flex-1">
-        <p className="m-0 text-sm font-medium">{label}</p>
-        {description && <p className="m-0 mt-0.5 text-[12px] text-[var(--muted)]">{description}</p>}
-      </div>
-      <Switch checked={checked} onCheckedChange={setChecked} />
-    </div>
-  );
-}
-
-function SectionHeader({ title, description }: { title: string; description?: string }) {
+function SectionHeader({
+  title,
+  description,
+}: {
+  title: string;
+  description?: string;
+}) {
   return (
     <div className="mb-6">
       <h2 className="m-0 text-lg font-semibold">{title}</h2>
       {description && (
-        <Text variant="muted" className="m-0 mt-1 text-sm">{description}</Text>
+        <Text color="muted" className="m-0 mt-1 text-sm">{description}</Text>
       )}
     </div>
   );
 }
 
-/* ── Appearance subsection (inside General) ── */
-function AppearanceSection() {
-  const { enabled, setEnabled } = useClickEffect();
-  const { t } = useI18n();
-  const s = t.settings;
+function StatusLine({
+  state,
+  okText,
+  errText,
+}: {
+  state: "idle" | "saving" | "ok" | "error";
+  okText: string;
+  errText: string;
+}) {
+  if (state === "idle") return null;
+  if (state === "saving") return null;
   return (
-    <div className="space-y-5">
-      <p className="m-0 text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">{s.appearance}</p>
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex-1">
-          <p className="m-0 text-sm font-medium">{s.clickRipple}</p>
-          <p className="m-0 mt-0.5 text-[12px] text-[var(--muted)]">{s.clickRippleDesc}</p>
-        </div>
-        <Switch checked={enabled} onCheckedChange={setEnabled} />
-      </div>
-    </div>
+    <p
+      className={`m-0 text-xs ${
+        state === "ok" ? "text-emerald-600" : "text-red-500"
+      }`}
+    >
+      {state === "ok" ? okText : errText}
+    </p>
   );
 }
 
-/* ── Section content ── */
+function initialsFrom(value: string) {
+  const parts = value.trim().split(/[\s._-]+/).filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+  return (parts[0]?.slice(0, 2) ?? "?").toUpperCase();
+}
+
+/* ── General section: workspace + appearance + locale ────────── */
+
 function GeneralSection() {
   const { t, locale, setLocale } = useI18n();
   const s = t.settings;
+  const { activeWorkspaceId, workspaces, refreshProjects } = useWorkspaceShell();
+  const { enabled: rippleEnabled, setEnabled: setRippleEnabled } = useClickEffect();
+
+  const activeWorkspace: WorkspacePayload | undefined = useMemo(
+    () => workspaces.find((w) => w.id === activeWorkspaceId),
+    [workspaces, activeWorkspaceId],
+  );
+
+  const [name, setName] = useState("");
+  const [savingState, setSavingState] = useState<"idle" | "saving" | "ok" | "error">("idle");
+
+  // Гидрация формы при смене активного workspace.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setName(activeWorkspace?.name ?? "");
+    setSavingState("idle");
+  }, [activeWorkspace?.id, activeWorkspace?.name]);
+
+  const dirty =
+    Boolean(activeWorkspace) &&
+    name.trim() !== (activeWorkspace?.name ?? "") &&
+    name.trim().length >= 3;
+
+  const handleSave = async () => {
+    if (!activeWorkspaceId || !dirty) return;
+    setSavingState("saving");
+    try {
+      await api.updateWorkspaceInfo(activeWorkspaceId, {
+        name: name.trim(),
+      });
+      // Бэкенд возвращает MessageResponse без свежего workspace, поэтому
+      // обновление списка `workspaces` в контексте произойдёт при следующей
+      // перезагрузке. `refreshProjects` ниже — лёгкий способ форсировать
+      // обновление workspace-уровневых данных, не делая отдельного fetch.
+      await refreshProjects();
+      setSavingState("ok");
+    } catch (err) {
+      console.error("Failed to update workspace:", err);
+      setSavingState("error");
+    }
+  };
+
   return (
     <div className="space-y-8">
       <SectionHeader title={s.generalTitle} description={s.generalDesc} />
 
       <div className="space-y-5">
         <Field label={s.workspaceName}>
-          <TextInput defaultValue="Julow Platform" />
+          <TextInput
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            disabled={!activeWorkspaceId}
+            minLength={3}
+            maxLength={100}
+          />
         </Field>
-        <Field label={s.workspaceUrl} hint={s.workspaceUrlHint}>
-          <div className="flex h-9 items-center overflow-hidden rounded-lg border border-[var(--border)] focus-within:border-[var(--accent)]/60 transition-colors">
-            <span className="flex h-full items-center border-r border-[var(--border)] bg-[var(--surface-secondary)] px-3 text-sm text-[var(--muted)]">julow.io/</span>
-            <input className="flex-1 bg-transparent px-3 text-sm focus:outline-none" defaultValue="julow-platform" />
-          </div>
+        <Field label={s.language}>
+          <select
+            value={locale}
+            onChange={(e) => setLocale(e.target.value as Locale)}
+            className="h-9 w-full appearance-none cursor-pointer rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 text-sm text-[var(--foreground)] focus:border-[var(--accent)]/60 focus:outline-none transition-colors"
+          >
+            <option value="en">{s.langEn}</option>
+            <option value="ru">{s.langRu}</option>
+            <option value="de">{s.langDe}</option>
+          </select>
         </Field>
-        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
-          <Field label={s.timezone}>
-            <SelectInput options={["UTC+3 (Moscow)", "UTC+0 (London)", "UTC-5 (New York)", "UTC+8 (Singapore)"]} />
-          </Field>
-          <Field label={s.language}>
-            {/* Language selector — directly changes app locale */}
-            <select
-              value={locale}
-              onChange={(e) => setLocale(e.target.value as Locale)}
-              className="h-9 w-full appearance-none cursor-pointer rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 text-sm text-[var(--foreground)] focus:border-[var(--accent)]/60 focus:outline-none transition-colors"
-            >
-              <option value="en">{s.langEn}</option>
-              <option value="ru">{s.langRu}</option>
-              <option value="de">{s.langDe}</option>
-            </select>
-          </Field>
-        </div>
       </div>
 
       <Separator />
 
       <div className="space-y-5">
-        <p className="m-0 text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">{s.prefs}</p>
-        <SwitchRow label={s.publicWs}    description={s.publicWsDesc} />
-        <SwitchRow label={s.guestAccess} description={s.guestAccessDesc} defaultChecked />
-        <SwitchRow label={s.analytics}   description={s.analyticsDesc} defaultChecked />
+        <p className="m-0 text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">
+          {s.appearance}
+        </p>
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex-1">
+            <p className="m-0 text-sm font-medium">{s.clickRipple}</p>
+            <p className="m-0 mt-0.5 text-[12px] text-[var(--muted)]">
+              {s.clickRippleDesc}
+            </p>
+          </div>
+          <Switch checked={rippleEnabled} onCheckedChange={setRippleEnabled} />
+        </div>
       </div>
 
-      <Separator />
-
-      <AppearanceSection />
-
-      <div className="flex items-center gap-2 pt-2">
-        <Button size="sm">Save changes</Button>
-        <Button size="sm" variant="secondary">Reset to defaults</Button>
+      <div className="flex items-center gap-3 pt-2">
+        <Button
+          size="sm"
+          onPress={handleSave}
+          isDisabled={!dirty || savingState === "saving"}
+        >
+          {savingState === "saving" ? s.saving : s.saveChanges}
+        </Button>
+        <StatusLine
+          state={savingState}
+          okText={s.saved}
+          errText={s.saveFailed}
+        />
       </div>
     </div>
   );
 }
 
+/* ── Account section: profile (bio) + active sessions ──────── */
+
 function AccountSection() {
+  const { t } = useI18n();
+  const s = t.settings;
   const [user, setUser] = useState<UserPayload | null>(null);
+  const [profile, setProfile] = useState<ProfilePayload | null>(null);
+  const [bio, setBio] = useState("");
+  const [savingState, setSavingState] = useState<"idle" | "saving" | "ok" | "error">("idle");
+
+  // ── Sessions ───────────────────────────────────────
+  // Раньше список сессий жил в отдельной вкладке Security вместе с
+  // формой смены пароля. Мы убрали вкладку и форму пароля пока нет
+  // востребованности — но сессии всё равно нужны для безопасности
+  // (возможность выйти с чужого устройства), поэтому переехали вниз
+  // вкладки Account.
+  const [sessions, setSessions] = useState<SessionPayload[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
+  const [revokingId, setRevokingId] = useState<string | null>(null);
+
   useEffect(() => {
     let cancelled = false;
-    api.getMe()
-      .then((payload) => {
-        if (!cancelled) setUser(payload);
-      })
-      .catch(() => {
-        if (!cancelled) setUser(null);
+    Promise.all([api.getMe().catch(() => null), api.getMyProfile().catch(() => null)])
+      .then(([userPayload, profilePayload]) => {
+        if (cancelled) return;
+        setUser(userPayload);
+        setProfile(profilePayload);
+        setBio(profilePayload?.bio ?? "");
       });
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSessionsLoading(true);
+    api.getActiveSessions()
+      .then((list) => { if (!cancelled) setSessions(list); })
+      .catch(() => { if (!cancelled) setSessions([]); })
+      .finally(() => { if (!cancelled) setSessionsLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const dirty = bio !== (profile?.bio ?? "");
+
+  const handleSave = async () => {
+    if (!dirty) return;
+    setSavingState("saving");
+    try {
+      // Бэкенд игнорирует undefined-поля, поэтому jobTitle не передаём —
+      // UI больше это поле не показывает и разрешать его редактировать не нужно.
+      await api.updatePersonalInfo({ bio });
+      const fresh = await api.getMyProfile().catch(() => profile);
+      if (fresh) setProfile(fresh);
+      setSavingState("ok");
+    } catch (err) {
+      console.error("Failed to update profile:", err);
+      setSavingState("error");
+    }
+  };
+
+  const handleRevoke = async (sessionId: string) => {
+    setRevokingId(sessionId);
+    try {
+      await api.terminateSession(sessionId);
+      setSessions((prev) => prev.filter((session) => session.id !== sessionId));
+    } catch (err) {
+      console.error("Failed to terminate session:", err);
+    } finally {
+      setRevokingId(null);
+    }
+  };
+
   const displayName = user?.email.split("@")[0] ?? "—";
-  const email = user?.email ?? "—";
-  const [firstName, ...lastParts] = displayName.split(/[._-\s]+/).filter(Boolean);
-  const lastName = lastParts.join(" ");
+  const initials = initialsFrom(displayName);
+
   return (
     <div className="space-y-8">
-      <SectionHeader title="Account" description="Manage your personal profile and preferences." />
+      <SectionHeader title={s.accountTitle} description={s.accountDesc} />
 
       <div className="flex items-center gap-4">
-        <div className="flex h-16 w-16 items-center justify-center rounded-full bg-accent/15">
-          <UserCircleIcon size={36} strokeWidth={1.5} className="text-accent" />
+        <div className="flex h-16 w-16 items-center justify-center rounded-full bg-accent/15 text-base font-semibold text-accent">
+          {initials}
         </div>
         <div>
           <p className="m-0 font-semibold">{displayName}</p>
-          <Text variant="muted" className="m-0 text-sm">{email}</Text>
-          <Button size="sm" variant="secondary" className="mt-2">Change avatar</Button>
+          <Text color="muted" className="m-0 text-sm">{user?.email ?? "—"}</Text>
         </div>
       </div>
 
       <Separator />
 
       <div className="space-y-5">
-        <p className="m-0 text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">Profile</p>
-        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
-          <Field label="First name"><TextInput key={`first-${user?.id ?? "empty"}`} defaultValue={firstName ?? ""} /></Field>
-          <Field label="Last name"><TextInput key={`last-${user?.id ?? "empty"}`} defaultValue={lastName} /></Field>
-        </div>
-        <Field label="Email"><TextInput key={`email-${user?.id ?? "empty"}`} type="email" defaultValue={email === "—" ? "" : email} /></Field>
-        <Field label="Role / Title"><TextInput key={`role-${user?.id ?? "empty"}`} defaultValue={user?.status ?? ""} /></Field>
-      </div>
-
-      <Separator />
-
-      <div className="space-y-5">
-        <p className="m-0 text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">Preferences</p>
-        <SwitchRow label="Compact view" description="Reduce spacing in task lists and boards." />
-        <SwitchRow label="Show task IDs" description="Display short IDs next to task titles." defaultChecked />
-      </div>
-
-      <div className="flex gap-2 pt-2">
-        <Button size="sm">Save profile</Button>
-      </div>
-    </div>
-  );
-}
-
-const ROLE_COLOR: Record<string, string> = {
-  Owner: "bg-accent/10 text-accent",
-  Admin: "bg-violet-500/10 text-violet-600",
-  Member: "bg-emerald-500/10 text-emerald-600",
-  Viewer: "bg-[var(--surface-secondary)] text-[var(--muted)]",
-};
-
-function MembersSection() {
-  const { activeWorkspaceId } = useWorkspaceShell();
-  const [members, setMembers] = useState<WorkspaceMemberPayload[]>([]);
-  const [query, setQuery] = useState("");
-  useEffect(() => {
-    if (!activeWorkspaceId) return;
-    let cancelled = false;
-    api.getWorkspaceMembers(activeWorkspaceId)
-      .then((payload) => {
-        if (!cancelled) setMembers(payload);
-      })
-      .catch(() => {
-        if (!cancelled) setMembers([]);
-      });
-    return () => { cancelled = true; };
-  }, [activeWorkspaceId]);
-  const filteredMembers = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return members;
-    return members.filter((member) => {
-      const name = member.displayName ?? member.userId;
-      return name.toLowerCase().includes(q) || member.userId.toLowerCase().includes(q);
-    });
-  }, [members, query]);
-  return (
-    <div className="space-y-6">
-      <SectionHeader title="Members" description="Manage who has access to this workspace." />
-
-      <div className="flex items-center justify-between">
-        <div className="relative flex items-center">
-          <input
-            type="text"
-            placeholder="Search members..."
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            className="h-8 w-56 rounded-lg border border-[var(--border)] bg-transparent pl-3 pr-3 text-sm placeholder:text-[var(--muted)]/60 focus:border-[var(--accent)]/50 focus:outline-none transition-colors"
+        <Field label={s.profileEmail}>
+          <TextInput value={user?.email ?? ""} readOnly disabled />
+        </Field>
+        <Field label={s.profileBio} hint={s.profileBioHint}>
+          <TextArea
+            value={bio}
+            onChange={(e) => setBio(e.target.value)}
+            maxLength={500}
+            placeholder={s.profileBioHint}
           />
-        </div>
-        <Button size="sm">
-          <UserGroupIcon size={14} />
-          Invite member
-        </Button>
+        </Field>
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-[var(--border)]/60">
-        <div className="grid grid-cols-[1fr_100px_80px] gap-3 border-b border-[var(--border)]/60 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--muted)]/70">
-          <span>Member</span>
-          <span className="hidden sm:block">Role</span>
-          <span />
-        </div>
-        {filteredMembers.map((m, i) => {
-          const name = m.displayName ?? `User ${m.userId.slice(0, 8)}`;
-          const role = m.roleId;
+      <div className="flex items-center gap-3 pt-2">
+        <Button
+          size="sm"
+          onPress={handleSave}
+          isDisabled={!dirty || savingState === "saving"}
+        >
+          {savingState === "saving" ? s.saving : s.saveChanges}
+        </Button>
+        <StatusLine
+          state={savingState}
+          okText={s.saved}
+          errText={s.saveFailed}
+        />
+      </div>
+
+      <Separator />
+
+      {/* Активные сессии — переехали из удалённой Security-вкладки. */}
+      <div className="space-y-4">
+        <p className="m-0 text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">
+          {s.sessionsTitle}
+        </p>
+        {sessionsLoading && (
+          <p className="m-0 text-sm text-[var(--muted)]">{t.common.loading}</p>
+        )}
+        {!sessionsLoading && sessions.length === 0 && (
+          <p className="m-0 text-sm text-[var(--muted)]">{s.sessionsEmpty}</p>
+        )}
+        {!sessionsLoading && sessions.map((session) => {
+          const device = session.deviceInfo?.trim() || s.sessionDeviceUnknown;
+          const created = new Date(session.createdAt);
+          const dateLabel = Number.isNaN(created.getTime())
+            ? ""
+            : created.toLocaleString();
           return (
-          <div
-            key={m.id}
-            className={`grid grid-cols-[1fr_100px_80px] items-center gap-3 px-4 py-3.5 ${i !== 0 ? "border-t border-[var(--border)]/40" : ""}`}
-          >
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="relative shrink-0">
-                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-accent/15 text-xs font-bold text-accent">{initialsFrom(name)}</div>
-                {m.isActive && <span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-[var(--surface)] bg-emerald-500" />}
-              </div>
+            <div
+              key={session.id}
+              className="flex items-center justify-between rounded-xl border border-[var(--border)]/60 px-4 py-3"
+            >
               <div className="min-w-0">
-                <p className="m-0 truncate text-sm font-medium">{name}</p>
-                <Text variant="muted" className="m-0 hidden text-xs sm:block">{m.userId}</Text>
+                <p className="m-0 truncate text-sm font-medium">{device}</p>
+                <Text color="muted" className="m-0 text-[11px]">
+                  {session.ipAddress} · {dateLabel}
+                </Text>
               </div>
+              <Button
+                size="sm"
+                variant="secondary"
+                onPress={() => handleRevoke(session.id)}
+                isDisabled={revokingId === session.id}
+              >
+                {revokingId === session.id
+                  ? s.sessionRevoking
+                  : s.sessionRevoke}
+              </Button>
             </div>
-            <span className={`hidden sm:inline-flex w-fit items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${ROLE_COLOR[role] ?? "bg-[var(--surface-secondary)] text-[var(--muted)]"}`}>{role.slice(0, 8)}</span>
-            <div className="flex justify-end">
-              {m.source !== "OWNER" && (
-                <button type="button" className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--muted)] transition-colors hover:bg-red-500/10 hover:text-red-500">
-                  <Cancel01Icon size={13} strokeWidth={2} />
-                </button>
-              )}
-            </div>
-          </div>
           );
         })}
       </div>
@@ -330,237 +414,154 @@ function MembersSection() {
   );
 }
 
-function NotificationsSection() {
-  return (
-    <div className="space-y-8">
-      <SectionHeader title="Notifications" description="Choose how and when you receive updates." />
+/* ── Members section: read-only list from backend ────────────── */
 
-      <div className="space-y-5">
-        <p className="m-0 text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">Email</p>
-        <SwitchRow label="Daily digest" description="Summary of your tasks and team activity every morning." defaultChecked />
-        <SwitchRow label="Task assignments" description="Notify when a task is assigned to you." defaultChecked />
-        <SwitchRow label="Mentions" description="When someone @mentions you in a comment." defaultChecked />
-        <SwitchRow label="Project updates" description="Sprint starts, completions, and milestone events." />
-      </div>
+function MembersSection() {
+  const { t } = useI18n();
+  const s = t.settings;
+  const { activeWorkspaceId } = useWorkspaceShell();
+  const [members, setMembers] = useState<WorkspaceMemberPayload[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
 
-      <Separator />
+  useEffect(() => {
+    if (!activeWorkspaceId) return;
+    let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLoading(true);
+    api.getWorkspaceMembers(activeWorkspaceId)
+      .then((payload) => {
+        if (!cancelled) setMembers(payload);
+      })
+      .catch(() => {
+        if (!cancelled) setMembers([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [activeWorkspaceId]);
 
-      <div className="space-y-5">
-        <p className="m-0 text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">In-app</p>
-        <SwitchRow label="Real-time alerts" description="Instant bell icon notifications for critical updates." defaultChecked />
-        <SwitchRow label="Comment replies" description="When someone replies to your comment thread." defaultChecked />
-        <SwitchRow label="Status changes" description="Task moved to a different column or status." />
-      </div>
+  const filteredMembers = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return members;
+    return members.filter((m) => {
+      const name = m.displayName ?? m.userId;
+      return (
+        name.toLowerCase().includes(q) ||
+        m.userId.toLowerCase().includes(q)
+      );
+    });
+  }, [members, query]);
 
-      <Separator />
-
-      <div className="space-y-5">
-        <p className="m-0 text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">Integrations</p>
-        <SwitchRow label="Slack" description="Post notifications to your configured Slack channel." defaultChecked />
-        <SwitchRow label="Telegram" description="Receive critical alerts via Telegram bot." />
-      </div>
-
-      <div className="flex gap-2 pt-2">
-        <Button size="sm">Save preferences</Button>
-      </div>
-    </div>
-  );
-}
-
-const integrations = [
-  { name: "GitHub", description: "Sync pull requests and commits to tasks.", connected: true, icon: "GH" },
-  { name: "Slack", description: "Send notifications and updates to channels.", connected: true, icon: "SL" },
-  { name: "Figma", description: "Embed design files directly in tasks.", connected: false, icon: "FG" },
-  { name: "Jira", description: "Import and mirror issues from Jira boards.", connected: false, icon: "JR" },
-  { name: "Google Calendar", description: "Sync task due dates with your calendar.", connected: true, icon: "GC" },
-  { name: "Telegram", description: "Receive critical alerts via bot.", connected: false, icon: "TG" },
-];
-
-function IntegrationsSection() {
   return (
     <div className="space-y-6">
-      <SectionHeader title="Integrations" description="Connect Julow to the tools your team already uses." />
+      <SectionHeader title={s.membersTitle} description={s.membersDesc} />
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        {integrations.map((item) => (
-          <div
-            key={item.name}
-            className="flex items-start gap-3 rounded-xl border border-[var(--border)]/60 p-4 transition-colors hover:bg-[var(--surface-secondary)]/30"
-          >
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--surface-secondary)] text-xs font-bold text-[var(--foreground)]">
-              {item.icon}
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <p className="m-0 text-sm font-semibold">{item.name}</p>
-                {item.connected && (
-                  <CheckmarkCircle02Icon size={13} strokeWidth={2} className="text-emerald-500" />
-                )}
+      <div className="relative flex items-center">
+        <input
+          type="text"
+          placeholder={s.membersSearch}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          className="h-8 w-full max-w-sm rounded-lg border border-[var(--border)] bg-transparent px-3 text-sm placeholder:text-[var(--muted)]/60 focus:border-[var(--accent)]/50 focus:outline-none transition-colors"
+        />
+      </div>
+
+      <div className="overflow-hidden rounded-xl border border-[var(--border)]/60">
+        <div className="grid grid-cols-[1fr_120px] gap-3 border-b border-[var(--border)]/60 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--muted)]/70">
+          <span>Member</span>
+          <span>Role</span>
+        </div>
+        {loading && (
+          <div className="px-4 py-8 text-center text-sm text-[var(--muted)]">
+            {t.common.loading}
+          </div>
+        )}
+        {!loading && filteredMembers.length === 0 && (
+          <div className="px-4 py-8 text-center text-sm text-[var(--muted)]">
+            {s.membersEmpty}
+          </div>
+        )}
+        {!loading && filteredMembers.map((m) => {
+          const name = m.displayName ?? m.userId;
+          return (
+            <div
+              key={m.id}
+              className="grid grid-cols-[1fr_120px] items-center gap-3 border-b border-[var(--border)]/40 px-4 py-3 last:border-b-0"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent/10 text-xs font-semibold text-accent">
+                  {initialsFrom(name)}
+                </div>
+                <div className="min-w-0">
+                  <p className="m-0 truncate text-sm font-medium">{name}</p>
+                  <Text color="muted" className="m-0 truncate text-[11px]">
+                    {m.userId}
+                  </Text>
+                </div>
               </div>
-              <Text variant="muted" className="m-0 mt-0.5 text-[12px] leading-relaxed">{item.description}</Text>
+              <span className="text-[11px] text-[var(--muted)]">
+                {m.isActive ? "Active" : "Inactive"}
+              </span>
             </div>
-            <Button size="sm" variant={item.connected ? "secondary" : "primary"} className="shrink-0 mt-0.5">
-              {item.connected ? "Disconnect" : "Connect"}
-            </Button>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
 }
 
-function SecuritySection() {
-  return (
-    <div className="space-y-8">
-      <SectionHeader title="Security" description="Protect your account and manage active sessions." />
-
-      <div className="space-y-5">
-        <p className="m-0 text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">Authentication</p>
-        <SwitchRow label="Two-factor authentication" description="Require a verification code on every sign-in." defaultChecked />
-        <SwitchRow label="Single sign-on (SSO)" description="Let team members sign in via your identity provider." />
-        <SwitchRow label="Passwordless login" description="Use magic link email instead of a password." />
-      </div>
-
-      <Separator />
-
-      <div className="space-y-5">
-        <p className="m-0 text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">Password</p>
-        <Field label="Current password">
-          <TextInput type="password" placeholder="••••••••" />
-        </Field>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Field label="New password">
-            <TextInput type="password" placeholder="Min. 12 characters" />
-          </Field>
-          <Field label="Confirm new password">
-            <TextInput type="password" placeholder="Repeat password" />
-          </Field>
-        </div>
-        <Button size="sm" variant="secondary">
-          <Key01Icon size={14} />
-          Update password
-        </Button>
-      </div>
-
-      <Separator />
-
-      <div className="space-y-4">
-        <p className="m-0 text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">Active sessions</p>
-        {[
-          { device: "Chrome · macOS Sequoia", location: "Moscow, Russia", current: true, time: "Now" },
-          { device: "Safari · iPhone 16 Pro", location: "Moscow, Russia", current: false, time: "2h ago" },
-          { device: "Firefox · Windows 11", location: "Saint-Petersburg, Russia", current: false, time: "5d ago" },
-        ].map((session) => (
-          <div key={session.device} className="flex items-center justify-between rounded-xl border border-[var(--border)]/60 px-4 py-3">
-            <div>
-              <p className="m-0 text-sm font-medium">{session.device}</p>
-              <Text variant="muted" className="m-0 text-[11px]">{session.location} · {session.time}</Text>
-            </div>
-            {session.current ? (
-              <span className="rounded-full bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium text-emerald-600">Current</span>
-            ) : (
-              <Button size="sm" variant="secondary">Revoke</Button>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-const PLAN_FEATURES = [
-  "Unlimited projects",
-  "Up to 25 team members",
-  "Advanced analytics",
-  "Priority support",
-  "Custom integrations",
-];
-
-function BillingSection() {
-  return (
-    <div className="space-y-8">
-      <SectionHeader title="Billing" description="Manage your subscription plan and payment details." />
-
-      {/* Current plan */}
-      <div className="rounded-xl border border-accent/30 bg-accent/5 p-5">
-        <div className="flex items-start justify-between">
-          <div>
-            <div className="flex items-center gap-2">
-              <p className="m-0 text-base font-bold">Pro Plan</p>
-              <span className="rounded-full bg-accent/15 px-2.5 py-0.5 text-[11px] font-semibold text-accent">Active</span>
-            </div>
-            <Text variant="muted" className="m-0 mt-1 text-sm">$29 / month · Renews May 14, 2026</Text>
-          </div>
-          <Button size="sm" variant="secondary">Change plan</Button>
-        </div>
-        <Separator className="my-4 bg-accent/20" />
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-          {PLAN_FEATURES.map((f) => (
-            <div key={f} className="flex items-center gap-2">
-              <CheckmarkCircle02Icon size={14} strokeWidth={2} className="shrink-0 text-accent" />
-              <Text variant="muted" className="m-0 text-[12px]">{f}</Text>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="space-y-4">
-        <p className="m-0 text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">Payment method</p>
-        <div className="flex items-center justify-between rounded-xl border border-[var(--border)]/60 px-4 py-3.5">
-          <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--surface-secondary)]">
-              <CreditCardIcon size={18} strokeWidth={1.8} className="text-[var(--muted)]" />
-            </div>
-            <div>
-              <p className="m-0 text-sm font-medium">•••• •••• •••• 4242</p>
-              <Text variant="muted" className="m-0 text-[11px]">Visa · Expires 12/27</Text>
-            </div>
-          </div>
-          <Button size="sm" variant="secondary">Update</Button>
-        </div>
-      </div>
-
-      <div className="space-y-3">
-        <p className="m-0 text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">Recent invoices</p>
-        {[
-          { date: "Apr 14, 2026", amount: "$29.00", status: "Paid" },
-          { date: "Mar 14, 2026", amount: "$29.00", status: "Paid" },
-          { date: "Feb 14, 2026", amount: "$29.00", status: "Paid" },
-        ].map((inv) => (
-          <div key={inv.date} className="flex items-center justify-between rounded-lg border border-[var(--border)]/40 px-4 py-3">
-            <Text variant="muted" className="m-0 text-sm">{inv.date}</Text>
-            <span className="text-sm font-semibold">{inv.amount}</span>
-            <div className="flex items-center gap-2">
-              <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-600">{inv.status}</span>
-              <Button size="sm" variant="secondary">PDF</Button>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
+/* ── Page shell ──────────────────────────────────────────────── */
 
 const SECTION_CONTENT: Record<Section, React.ReactNode> = {
   general: <GeneralSection />,
   account: <AccountSection />,
   members: <MembersSection />,
-  notifications: <NotificationsSection />,
-  integrations: <IntegrationsSection />,
-  security: <SecuritySection />,
-  billing: <BillingSection />,
 };
 
+/** Допустимые значения ?tab=... — совпадают с id секций. */
+const VALID_TABS: ReadonlySet<Section> = new Set(["general", "account", "members"]);
+
+function parseTabParam(raw: string | null): Section | null {
+  if (!raw) return null;
+  return VALID_TABS.has(raw as Section) ? (raw as Section) : null;
+}
+
 export function SettingsPage() {
-  const [active, setActive] = useState<Section>("general");
   const { t } = useI18n();
   const s = t.settings;
+  // Deep-link: /settings?tab=account открывает вкладку Account.
+  // Используется в app-shell, пункт «Мой аккаунт» в профиль-шторке.
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const initialTab = parseTabParam(searchParams.get("tab")) ?? "general";
+  const [active, setActive] = useState<Section>(initialTab);
+
+  // Синхронизация state ← URL при внешней навигации (router.push из шторки).
+  useEffect(() => {
+    const tab = parseTabParam(searchParams.get("tab"));
+    if (tab && tab !== active) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setActive(tab);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  // Обратная синхронизация URL ← state при клике по табу.
+  // replace вместо push, чтобы не плодить историю.
+  const handleSetActive = (next: Section) => {
+    setActive(next);
+    const sp = new URLSearchParams(searchParams.toString());
+    sp.set("tab", next);
+    router.replace(`/settings?${sp.toString()}`, { scroll: false });
+  };
 
   return (
     <div className="py-6">
       <div className="mb-6">
         <h1 className="m-0 text-2xl font-bold tracking-tight">{s.title}</h1>
-        <Text variant="muted" className="m-0 mt-1 text-sm">{s.subtitle}</Text>
+        <Text color="muted" className="m-0 mt-1 text-sm">{s.subtitle}</Text>
       </div>
 
       <div className="flex min-h-[600px] overflow-hidden rounded-2xl border border-[var(--border)]/60 bg-[var(--surface)]">
@@ -574,7 +575,7 @@ export function SettingsPage() {
                 <button
                   key={item.id}
                   type="button"
-                  onClick={() => setActive(item.id)}
+                  onClick={() => handleSetActive(item.id)}
                   className={`flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-sm transition-colors ${
                     isActive
                       ? "bg-accent/10 font-medium text-accent"
@@ -583,11 +584,6 @@ export function SettingsPage() {
                 >
                   <item.icon size={16} strokeWidth={1.8} className="shrink-0" />
                   <span className="flex-1 truncate">{label}</span>
-                  {item.badge && (
-                    <span className={`flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold ${isActive ? "bg-accent/20 text-accent" : "bg-[var(--surface-secondary)] text-[var(--muted)]"}`}>
-                      {item.badge}
-                    </span>
-                  )}
                 </button>
               );
             })}
@@ -595,12 +591,12 @@ export function SettingsPage() {
         </aside>
 
         {/* Mobile tab strip */}
-        <div className="sm:hidden w-full absolute top-0 left-0 flex overflow-x-auto border-b border-[var(--border)]/60 bg-[var(--surface)] px-2 py-2">
+        <div className="sm:hidden flex w-full overflow-x-auto border-b border-[var(--border)]/60 bg-[var(--surface)] px-2 py-2">
           {NAV_ITEMS.map((item) => (
             <button
               key={item.id}
               type="button"
-              onClick={() => setActive(item.id)}
+              onClick={() => handleSetActive(item.id)}
               className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
                 active === item.id
                   ? "bg-accent/10 text-accent"

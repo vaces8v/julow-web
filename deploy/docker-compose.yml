@@ -1,0 +1,280 @@
+# =============================================================================
+#  Julow — Full Stack (Web + Backend + Infrastructure)
+# =============================================================================
+#
+#  Этот compose-файл живёт в репозитории julow-web (deploy/), но запускает
+#  ОБА репозитория. Структура раскладки на диске:
+#
+#    parent-dir/
+#    ├── julow-web/           ← этот репо
+#    │   └── deploy/
+#    │       ├── docker-compose.yml   ← вы здесь
+#    │       └── .env.example
+#    └── julow_backend/       ← parallel-clone
+#
+#  Запуск (из julow-web/deploy/):
+#    cp .env.example .env
+#    docker compose up -d
+#
+#  Сервисы:
+#    web        :3000   — Next.js frontend
+#    backend    :8000   — FastAPI API
+#    postgres   :5432   — БД
+#    redis      :6379   — кеш + Celery + WS pub/sub
+#    kafka      :9092   — event bus (внутри docker-сети)
+#               :29092  — event bus (с хоста)
+#    minio      :9000   — S3-совместимое хранилище (API)
+#               :9001   — MinIO web console
+#    clamav     :3310   — антивирус для FileStorage
+#    mailhog    :1025   — dev SMTP
+#               :8025   — MailHog UI (просмотр писем)
+#
+#  ⚠️  Перед prod-запуском ОБЯЗАТЕЛЬНО:
+#    1. Сгенерировать новые AUTH_JWT_SECRET_KEY и ENCRYPTION_KEY
+#    2. Задать реальные OAuth client_id/secret для Google и GitHub
+#    3. Заменить `*` в CORS_ALLOWED_ORIGINS на реальные origin'ы frontend'а
+#    4. Включить CLAMAV_ENABLED=true
+#    5. Подменить mailhog на реальный SMTP (SES/SendGrid/Mailgun)
+# =============================================================================
+
+services:
+  # ── Frontend (Next.js standalone) ────────────────────────────────────────────
+  web:
+    build:
+      # Контекст указывает на родительскую директорию julow-web (../).
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        # NEXT_PUBLIC_* должны быть переданы как build-args, потому что
+        # Next.js инлайнит их в client bundle на этапе build.
+        # Внутри docker-сети web обращается к backend по hostname `backend`,
+        # но СНАРУЖИ браузер обращается через localhost — поэтому здесь
+        # указываем то, что увидит браузер.
+        NEXT_PUBLIC_API_BASE_URL: ${PUBLIC_API_BASE_URL:-http://localhost:8000/api/v1}
+        NEXT_PUBLIC_WS_BASE_URL: ${PUBLIC_WS_BASE_URL:-ws://localhost:8000}
+    container_name: julow-web
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      # Server-side runtime env (BFF route handlers — /api/auth/* —
+      # обращаются к backend по docker-network hostname).
+      BACKEND_INTERNAL_URL: http://backend:8000/api/v1
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: "1"
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+    depends_on:
+      backend:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # ── Backend API (FastAPI) ────────────────────────────────────────────────────
+  backend:
+    build:
+      # Контекст — соседний репо julow_backend.
+      context: ../../julow_backend
+      dockerfile: Dockerfile
+    container_name: julow-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      APP_DEBUG: "${APP_DEBUG:-false}"
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8000
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8000}
+      FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:-http://localhost:3000}
+
+      # Database
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: ${DB_PASSWORD:-postgres}
+      DB_NAME: julow
+
+      # Redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: 0
+
+      # Kafka
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_GROUP_ID: julow-consumer
+      KAFKA_AUTO_OFFSET_RESET: earliest
+
+      # S3 / MinIO
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      S3_BUCKET_NAME: julow
+      S3_REGION: us-east-1
+
+      # SMTP (MailHog для dev)
+      SMTP_HOST: mailhog
+      SMTP_PORT: 1025
+      SMTP_USE_TLS: "false"
+      SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL:-noreply@julow.com}
+
+      # Celery
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+
+      # CORS
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-["http://localhost:3000"]}
+      CORS_ALLOW_CREDENTIALS: "true"
+      CORS_ALLOWED_METHODS: '["GET","POST","PUT","PATCH","DELETE","OPTIONS"]'
+      CORS_ALLOWED_HEADERS: '["*"]'
+
+      # Auth / JWT — ОБЯЗАТЕЛЬНО смените в production.
+      AUTH_JWT_SECRET_KEY: ${AUTH_JWT_SECRET_KEY:-change-me-in-production}
+      AUTH_ACCESS_TOKEN_EXPIRE_MINUTES: "30"
+      AUTH_REFRESH_TOKEN_EXPIRE_DAYS: "7"
+
+      # Encryption — ОБЯЗАТЕЛЬНО сгенерируйте новый Fernet ключ для prod.
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-AAmioAjwB55kaBoOrZYZHrbnv21GCNdcPAxCgwJDs8s=}
+
+      # ClamAV
+      CLAMAV_ENABLED: ${CLAMAV_ENABLED:-true}
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: 3310
+
+      # OAuth
+      OAUTH_GOOGLE_CLIENT_ID: ${OAUTH_GOOGLE_CLIENT_ID:-}
+      OAUTH_GOOGLE_CLIENT_SECRET: ${OAUTH_GOOGLE_CLIENT_SECRET:-}
+      OAUTH_GITHUB_CLIENT_ID: ${OAUTH_GITHUB_CLIENT_ID:-}
+      OAUTH_GITHUB_CLIENT_SECRET: ${OAUTH_GITHUB_CLIENT_SECRET:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+      minio:
+        condition: service_healthy
+      mailhog:
+        condition: service_healthy
+      clamav:
+        condition: service_healthy
+
+  # ── PostgreSQL ───────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: julow-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: julow
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── Redis ────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: julow-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── Kafka (KRaft, без Zookeeper) ─────────────────────────────────────────────
+  kafka:
+    image: apache/kafka:latest
+    container_name: julow-kafka
+    restart: unless-stopped
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://:9092,PLAINTEXT_HOST://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      CLUSTER_ID: "julow-prod-cluster-001"
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+
+  # ── MinIO (S3-совместимый) ───────────────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: julow-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── ClamAV (антивирус для FileStorage BC) ────────────────────────────────────
+  clamav:
+    image: clamav/clamav:stable
+    container_name: julow-clamav
+    restart: unless-stopped
+    ports:
+      - "3310:3310"
+    volumes:
+      - clamav_db:/var/lib/clamav
+    healthcheck:
+      test: ["CMD-SHELL", "clamdcheck.sh || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      # Первый запуск качает базы вирусных сигнатур (~250MB) — может
+      # длиться 1-2 минуты, поэтому start_period увеличен.
+      start_period: 120s
+
+  # ── MailHog (dev SMTP — не для production!) ──────────────────────────────────
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: julow-mailhog
+    restart: unless-stopped
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8025"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  postgres_data:
+  redis_data:
+  kafka_data:
+  minio_data:
+  clamav_db:

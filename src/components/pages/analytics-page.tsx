@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Badge, Card, Text } from "@heroui/react";
 import {
   ArrowUpRight01Icon,
@@ -9,9 +10,11 @@ import {
   Idea01Icon,
   UserGroupIcon,
   FlowIcon,
+  RefreshIcon,
+  Loading03Icon,
 } from "hugeicons-react";
 import {
-  Area, XAxis, YAxis, CartesianGrid,
+  Area, AreaChart, XAxis, YAxis, CartesianGrid,
   Tooltip as RechartsTip,
   BarChart, Bar, PieChart, Pie, Cell, LineChart, Line, Legend,
   ComposedChart,
@@ -22,6 +25,7 @@ import { SlidingNumber } from "@/components/ui/sliding-number";
 import { RechartsAuto } from "@/components/ui/recharts-auto";
 import { useWorkspaceShell } from "@/components/workspace-shell-context";
 import { api, type TaskPayload } from "@/lib/api";
+import { useLabelResolver } from "@/components/pages/dashboard-label-resolver";
 
 const CAT_COLORS = ["#3b82f6", "#8b5cf6", "#06b6d4", "#f97316"];
 const AVATAR_COLORS = ["#3b82f6", "#8b5cf6", "#f97316", "#06b6d4", "#22c55e", "#ec4899"];
@@ -51,19 +55,46 @@ type FlowStageRow = {
   conv?: string;
 };
 
+/**
+ * Status-классификация по подстрокам, чтобы ловить:
+ *   - английские варианты (done / DONE / "In Progress");
+ *   - русские названия колонок ("Готово", "В работе", "Ревью");
+ *   - снейк/кебаб-кейс (in_progress / in-progress);
+ *   - workflow-status-ID (если содержит человекочитаемый суффикс).
+ * Раньше строгое `===` пропускало любое значение, отличное от
+ * 3 захардкоженных вариантов, из-за чего «Готово»-задачи не
+ * считались выполненными и метрики были нулевыми.
+ */
 function isDoneStatus(status: string) {
   const s = status?.toLowerCase() ?? "";
-  return s === "done" || s === "completed" || s === "closed";
+  return (
+    s.includes("done") ||
+    s.includes("complete") ||
+    s.includes("closed") ||
+    s.includes("готов") ||
+    s.includes("заверш") ||
+    s.includes("выполн")
+  );
 }
 
 function isInProgressStatus(status: string) {
   const s = status?.toLowerCase() ?? "";
-  return s === "in_progress" || s === "active" || s === "in-progress";
+  return (
+    s.includes("progress") ||
+    s.includes("active") ||
+    s.includes("doing") ||
+    s.includes("работ") ||
+    s.includes("в процесс")
+  );
 }
 
 function isReviewStatus(status: string) {
   const s = status?.toLowerCase() ?? "";
-  return s === "review" || s === "in_review" || s === "in-review";
+  return (
+    s.includes("review") ||
+    s.includes("ревью") ||
+    s.includes("проверк")
+  );
 }
 
 function safeDate(value?: string) {
@@ -72,13 +103,6 @@ function safeDate(value?: string) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-function categoryKey(task: TaskPayload) {
-  const text = `${task.taskType ?? ""} ${task.labels.join(" ")} ${task.title}`.toLowerCase();
-  if (text.includes("design") || text.includes("ui") || text.includes("ux")) return "design";
-  if (text.includes("test") || text.includes("qa") || text.includes("bug")) return "testing";
-  if (text.includes("plan") || text.includes("doc") || text.includes("spec")) return "planning";
-  return "dev";
-}
 
 function pctChange(current: number, previous: number) {
   if (previous === 0) return current > 0 ? "+100%" : "0%";
@@ -105,33 +129,118 @@ function useMediaQuery(query: string) {
   return matches;
 }
 
+type StatAccent = "accent" | "emerald" | "amber" | "violet";
+
+const STAT_ACCENT_HEX: Record<StatAccent, string> = {
+  accent: "#3b82f6",
+  emerald: "#22c55e",
+  amber: "#f59e0b",
+  violet: "#a855f7",
+};
+
+const STAT_ACCENT_BG: Record<StatAccent, string> = {
+  accent: "bg-accent/10 text-accent",
+  emerald: "bg-emerald-500/10 text-emerald-600",
+  amber: "bg-amber-500/10 text-amber-600",
+  violet: "bg-violet-500/10 text-violet-600",
+};
+
 function StatCard({
-  label, value, unit, sub, change, up, delay = 0,
+  label, value, unit, sub, change, up, neutral, delay = 0, spark, accent = "accent", icon: Icon,
+  sparkLabel,
+  sparkValueFormat,
 }: {
   label: string; value: number; unit?: string; sub: string;
-  change: string; up: boolean; delay?: number;
+  change: string; up: boolean; neutral?: boolean;
+  delay?: number;
+  spark?: number[];
+  accent?: StatAccent;
+  icon?: React.ComponentType<{ size?: number; strokeWidth?: number; className?: string }>;
+  /** Подпись метрики в tooltip'е sparkline'а. Если не задано, используем `label`. */
+  sparkLabel?: string;
+  /** Форматирует число в значение для tooltip'а (напр. `d` для дней). */
+  sparkValueFormat?: (value: number) => string;
 }) {
+  // Sparkline-данные: [{ day: 'N d ago', v: count }]. Индекс
+  // конвертируем в человекочитаемый offset «N дн. назад / сегодня /
+  // вчера» — tooltip без этой подписи бессмысленен.
+  const sparkData = useMemo(() => {
+    const series = spark ?? [];
+    const total = series.length;
+    return series.map((v, i) => {
+      const daysAgo = total - 1 - i;
+      const day =
+        daysAgo === 0 ? "today"
+          : daysAgo === 1 ? "1d ago"
+            : `${daysAgo}d ago`;
+      return { day, v };
+    });
+  }, [spark]);
+  const stroke = STAT_ACCENT_HEX[accent];
+  const changeColor = neutral
+    ? "text-[var(--muted)]"
+    : up
+      ? "text-emerald-500"
+      : "text-red-500";
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay, duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
     >
-      <Card className="h-full">
-        <Card.Content className="flex flex-col gap-2 p-4">
-          <Text variant="muted" className="m-0 text-xs">{label}</Text>
-          <div className="flex items-end gap-2">
-            <p className="m-0 text-2xl font-bold tabular-nums leading-none">
-              <SlidingNumber value={value} />{unit}
-            </p>
-            <span className={`mb-0.5 flex items-center gap-0.5 text-xs font-semibold ${up ? "text-emerald-500" : "text-red-500"}`}>
-              {up
-                ? <ArrowUpRight01Icon size={12} strokeWidth={2.5} />
-                : <ArrowDownRight01Icon size={12} strokeWidth={2.5} />}
+      <Card className="group h-full overflow-hidden">
+        <Card.Content className="flex h-full flex-col gap-2 p-4">
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              {Icon && (
+                <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${STAT_ACCENT_BG[accent]}`}>
+                  <Icon size={14} strokeWidth={1.8} />
+                </span>
+              )}
+              <Text color="muted" className="m-0 truncate text-xs font-medium">{label}</Text>
+            </div>
+            <span className={`flex shrink-0 items-center gap-0.5 text-[11px] font-semibold ${changeColor}`}>
+              {!neutral && (up
+                ? <ArrowUpRight01Icon size={11} strokeWidth={2.5} />
+                : <ArrowDownRight01Icon size={11} strokeWidth={2.5} />)}
               {change}
             </span>
           </div>
-          <Text variant="muted" className="m-0 text-[11px]">{sub}</Text>
+          <p className="m-0 text-3xl font-bold tabular-nums leading-none">
+            <SlidingNumber value={value} />{unit}
+          </p>
+          <Text color="muted" className="m-0 text-[11px]">{sub}</Text>
+          {sparkData.length >= 2 && (
+            <RechartsAuto className="-mb-1 -mx-2 mt-auto h-12 min-h-[40px] w-[calc(100%+1rem)]">
+              <AreaChart data={sparkData} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
+                <RechartsTip
+                  cursor={{ stroke, strokeOpacity: 0.4, strokeWidth: 1 }}
+                  contentStyle={TOOLTIP_STYLE}
+                  labelFormatter={(label) => String(label)}
+                  formatter={(value) => {
+                    const n = Number(value);
+                    return [
+                      sparkValueFormat ? sparkValueFormat(n) : n,
+                      sparkLabel ?? label,
+                    ] as [string | number, string];
+                  }}
+                  wrapperStyle={{ outline: "none" }}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="v"
+                  stroke={stroke}
+                  strokeWidth={1.8}
+                  fill={stroke}
+                  fillOpacity={0.16}
+                  dot={false}
+                  activeDot={{ r: 3, stroke, strokeWidth: 2, fill: "var(--surface)" }}
+                  isAnimationActive
+                />
+                <XAxis dataKey="day" hide />
+              </AreaChart>
+            </RechartsAuto>
+          )}
         </Card.Content>
       </Card>
     </motion.div>
@@ -143,7 +252,10 @@ function Tab({ label, active, onClick }: { label: string; active: boolean; onCli
     <button
       type="button"
       onClick={onClick}
-      className={`rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-colors ${
+      // outline-none + focus-visible:ring — клик не оставляет белый
+      // дефолт-фокус от браузера, но Tab-навигация с клавиатуры всё ещё
+      // подсвечивает кнопку accent-ring'ом.
+      className={`rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-colors outline-none focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
         active
           ? "bg-accent/10 text-accent"
           : "text-[var(--muted)] hover:bg-[var(--surface-secondary)] hover:text-[var(--foreground)]"
@@ -218,7 +330,7 @@ function OverviewTeamSpotlight({
               </div>
               <div className="min-w-0 flex-1">
                 <p className="m-0 truncate text-sm font-medium leading-tight">{m.name}</p>
-                <Text variant="muted" className="m-0 truncate text-xs">{m.role}</Text>
+                <Text color="muted" className="m-0 truncate text-xs">{m.role}</Text>
               </div>
               <div className="shrink-0 text-right">
                 <p className="m-0 text-sm font-semibold tabular-nums leading-none">
@@ -286,7 +398,7 @@ function OverviewFlowPipeline({
             return (
               <div key={labels[idx]} className="space-y-1.5">
                 <div className="flex items-center justify-between gap-3">
-                  <Text variant="muted" className="m-0 min-w-0 flex-1 text-xs font-medium leading-snug">
+                  <Text color="muted" className="m-0 min-w-0 flex-1 text-xs font-medium leading-snug">
                     {labels[idx]}
                   </Text>
                   <div className="shrink-0 text-right">
@@ -324,7 +436,7 @@ function OverviewFlowPipeline({
           ].map(({ v, l }) => (
             <div key={l} className="text-center sm:text-left">
               <p className="m-0 text-lg font-semibold tabular-nums">{v}</p>
-              <Text variant="muted" className="m-0 text-[11px]">{l}</Text>
+              <Text color="muted" className="m-0 text-[11px]">{l}</Text>
             </div>
           ))}
         </div>
@@ -338,29 +450,51 @@ type Tab4 = "overview" | "sprints" | "team" | "flow";
 export function AnalyticsPage() {
   const { t } = useI18n();
   const ins = t.insights;
+  const router = useRouter();
   const { activeWorkspaceId } = useWorkspaceShell();
   const [tasks, setTasks] = useState<TaskPayload[]>([]);
   const [activeTab, setActiveTab] = useState<Tab4>("overview");
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const isNarrow = useMediaQuery("(max-width: 639px)");
   const isCompact = useMediaQuery("(max-width: 1023px)");
+  const labels = useLabelResolver(activeWorkspaceId);
 
-  useEffect(() => {
-    if (!activeWorkspaceId) return;
-    let cancelled = false;
-    api.getTasks(activeWorkspaceId)
-      .then((list) => {
-        if (!cancelled) setTasks(list);
-      })
-      .catch(() => {
-        if (!cancelled) setTasks([]);
-      });
-    return () => { cancelled = true; };
+  /**
+   * Загрузка задач. `loading` — initial fetch (показываем skeleton),
+   * `refreshing` — повторный (показываем спиннер на кнопке). Оба
+   * флага помогают не моргать UI при пустом ответе.
+   */
+  const fetchTasks = useCallback(async (mode: "initial" | "refresh") => {
+    if (!activeWorkspaceId) {
+      setTasks([]);
+      setLoading(false);
+      return;
+    }
+    if (mode === "initial") setLoading(true);
+    else setRefreshing(true);
+    try {
+      const list = await api.getTasks(activeWorkspaceId);
+      setTasks(list);
+    } catch {
+      setTasks([]);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
   }, [activeWorkspaceId]);
 
-  const catLabels = useMemo(
-    () => [ins.catDev, ins.catDesign, ins.catTesting, ins.catPlanning] as const,
-    [ins.catDev, ins.catDesign, ins.catTesting, ins.catPlanning],
-  );
+  useEffect(() => {
+    // fetchTasks setState'ит loading/refreshing внутри async-цикла; правило
+    // `react-hooks/set-state-in-effect` про async-fetch не догадывается.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void fetchTasks("initial").catch(() => undefined);
+  }, [fetchTasks]);
+
+  const handleRefresh = useCallback(() => {
+    void fetchTasks("refresh");
+  }, [fetchTasks]);
+
   const now = useMemo(() => new Date(), []);
   const currentWeekStart = useMemo(() => {
     const d = new Date(now);
@@ -396,6 +530,29 @@ export function AnalyticsPage() {
       const text = `${task.taskType ?? ""} ${task.labels.join(" ")} ${task.title}`.toLowerCase();
       return text.includes("bug") || text.includes("defect");
     }).length;
+    /**
+     * Cycle time WoW: считаем avg-cycle отдельно для задач,
+     * завершённых на текущей и предыдущей неделе, чтобы выдать
+     * корректный `cycleChange` (раньше всегда «0%»).
+     */
+    const cycleSamples = (range: { from: Date; to: Date }) =>
+      tasks
+        .map((task) => {
+          const created = safeDate(task.createdAt);
+          const completed = safeDate(task.completedAt);
+          if (!created || !completed) return null;
+          if (completed < range.from || completed >= range.to) return null;
+          return Math.max(0, completed.getTime() - created.getTime());
+        })
+        .filter((value): value is number => value != null);
+    const cycleAvgDays = (samples: number[]) =>
+      samples.length
+        ? Math.round((samples.reduce((sum, v) => sum + v, 0) / samples.length / 86_400_000) * 10) / 10
+        : 0;
+    const cycleDaysThisWeek = cycleAvgDays(cycleSamples({ from: currentWeekStart, to: currentWeekEnd }));
+    const cycleDaysPrevWeek = cycleAvgDays(cycleSamples({ from: previousWeekStart, to: currentWeekStart }));
+    // Для верхней карточки берём avg по всем завершённым (стабильнее),
+    // но WoW считаем именно по двум неделям выше.
     const completedWithDates = doneTasks
       .map((task) => {
         const created = safeDate(task.createdAt);
@@ -406,12 +563,35 @@ export function AnalyticsPage() {
     const cycleDays = completedWithDates.length
       ? Math.max(1, Math.round(completedWithDates.reduce((sum, value) => sum + value, 0) / completedWithDates.length / 86_400_000))
       : 0;
-    const categoryCounts = { dev: 0, design: 0, testing: 0, planning: 0 };
-    for (const task of tasks) categoryCounts[categoryKey(task)]++;
-    const catTotal = Object.values(categoryCounts).reduce((sum, value) => sum + value, 0) || 1;
-    const categoryData = (["dev", "design", "testing", "planning"] as const).map((key, index) => ({
-      name: catLabels[index],
-      value: Math.round((categoryCounts[key] / catTotal) * 100),
+    // Для cycle: «вверх» = плохо (рост времени), «вниз» = хорошо.
+    // Поэтому передаём `up` инвертированно при использовании.
+    const cycleDeltaDays = cycleDaysThisWeek - cycleDaysPrevWeek;
+    const cycleChangeStr =
+      cycleDaysPrevWeek === 0
+        ? cycleDaysThisWeek > 0 ? `${cycleDaysThisWeek}d` : "—"
+        : `${cycleDeltaDays > 0 ? "+" : ""}${Math.round((cycleDeltaDays / Math.max(0.1, cycleDaysPrevWeek)) * 100)}%`;
+    /**
+     * Распределение задач по реальным статусам — заменяет старые
+     * heuristic-категории (dev/design/testing/planning), которые
+     * угадывались по словам в заголовке и почти всегда давали 100% dev.
+     * Используем 4 универсальных стейджа: todo / in progress / review / done.
+     *
+     * Для todo-бакета берём отдельный лейбл `stageTodo` («В очереди»),
+     * чтобы не конфликтовать с funnel-стадией «Создано» (которая означает
+     * совсем другое — кумулятивный счёт всех задач за период).
+     */
+    const todoCount = totalTasks - doneTasks.length - inProgressTasks.length - reviewTasks.length;
+    const statusCounts = [
+      { name: ins.stageTodo, value: Math.max(0, todoCount) },
+      { name: ins.stageInProgress, value: inProgressTasks.length },
+      { name: ins.stageReview, value: reviewTasks.length },
+      { name: ins.stageDone, value: doneTasks.length },
+    ];
+    const statusTotal = statusCounts.reduce((sum, s) => sum + s.value, 0) || 1;
+    const categoryData = statusCounts.map((s) => ({
+      name: s.name,
+      value: Math.round((s.value / statusTotal) * 100),
+      count: s.value,
     }));
     const weeklyActivity = Array.from({ length: 7 }, (_, index) => {
       const date = new Date(currentWeekStart);
@@ -459,19 +639,32 @@ export function AnalyticsPage() {
         ideal,
       };
     });
+    /**
+     * Команда: считаем по реальным `assigneeIds` задач, исключая
+     * неназначенные (раньше они показывались строкой «Unassigned»
+     * с UUID-ишником, что выглядело как баг). Имя резолвим через
+     * `labels.resolveUser` — он подтягивает workspace-мемберов и
+     * возвращает displayName / email / шорт-UUID. Раньше тут был
+     * лишний обёртку «User abc123», но resolver сам делает email
+     * fetch для членов без displayName, так что строка либо имя,
+     * либо email.
+     */
     const memberMap = new Map<string, TeamMemberRow>();
     for (const task of tasks) {
-      const assignees = task.assigneeIds.length ? task.assigneeIds : ["unassigned"];
-      for (const assigneeId of assignees) {
+      if (!task.assigneeIds.length) continue;
+      for (const assigneeId of task.assigneeIds) {
+        const displayName = labels.resolveUser(assigneeId);
         const row = memberMap.get(assigneeId) ?? {
           id: assigneeId,
-          name: assigneeId === "unassigned" ? "Unassigned" : `User ${assigneeId.slice(0, 6)}`,
+          name: displayName,
           role: "Member",
           done: 0,
           inProgress: 0,
           pts: 0,
           focus: 0,
         };
+        // Имя могло прийти позже (после `getUserById`), обновляем.
+        row.name = displayName;
         if (isDoneStatus(task.status)) row.done++;
         if (isInProgressStatus(task.status)) row.inProgress++;
         row.pts += isDoneStatus(task.status) ? 3 : 1;
@@ -484,26 +677,102 @@ export function AnalyticsPage() {
     const inProgressCount = inProgressTasks.length;
     const reviewCount = reviewTasks.length;
     const doneCount = doneTasks.length;
+    /**
+     * Кумулятивная воронка: на каждом шаге значение = задачи,
+     * которые когда-либо достигли этой стадии (или дальше).
+     *
+     * Раньше тут был snapshot-подсчёт («В работе» = только
+     * сейчас в работе), и это выглядело как фейк: при 1 задаче
+     * в работе строка «В работе» показывала Конверсию 100%,
+     * а «Ревью» — 0%, хотя задача физически не могла перепрыгнуть.
+     *
+     *   Created       = всего создано
+     *   Started       = inProgress + review + done   («покинули todo»)
+     *   ReachedReview = review + done                («дошли до ревью»)
+     *   Completed     = done                         («завершены»)
+     *
+     * Conv % между шагами = реальная конверсия предыдущей стадии в
+     * следующую, что и подразумевает заголовок «Конверсия этапов».
+     */
+    const startedCount = inProgressCount + reviewCount + doneCount;
+    const reachedReviewCount = reviewCount + doneCount;
+    const completedCount = doneCount;
+    const pct = (n: number, d: number) => (d > 0 ? `${Math.round((n / d) * 100)}%` : "0%");
+    const funnelMax = Math.max(createdCount, 1);
     const flowStages: FlowStageRow[] = [
-      { value: createdCount, max: Math.max(createdCount, 1), color: "#94a3b8" },
-      { value: inProgressCount, max: Math.max(createdCount, 1), color: "#3b82f6", conv: createdCount ? `${Math.round((inProgressCount / createdCount) * 100)}%` : "0%" },
-      { value: reviewCount, max: Math.max(createdCount, 1), color: "#f97316", conv: inProgressCount ? `${Math.round((reviewCount / inProgressCount) * 100)}%` : "0%" },
-      { value: doneCount, max: Math.max(createdCount, 1), color: "#22c55e", conv: reviewCount ? `${Math.round((doneCount / reviewCount) * 100)}%` : "0%" },
+      { value: createdCount, max: funnelMax, color: "#94a3b8" },
+      { value: startedCount, max: funnelMax, color: "#3b82f6", conv: pct(startedCount, createdCount) },
+      { value: reachedReviewCount, max: funnelMax, color: "#f97316", conv: pct(reachedReviewCount, startedCount) },
+      { value: completedCount, max: funnelMax, color: "#22c55e", conv: pct(completedCount, reachedReviewCount) },
     ];
     const sprintProgressPct = totalTasks ? Math.round((doneCount / totalTasks) * 100) : 0;
+    const activeLoadCount = inProgressCount + reviewCount;
+    /**
+     * Sparkline-серии за последние 14 дней — для мини-графиков
+     * в верхних карточках. Хранит только числовые точки,
+     * чтобы StatCard сам строил [{x,v}] без знания формата.
+     */
+    const sparkDays = 14;
+    const sparkCompleted: number[] = [];
+    const sparkCreated: number[] = [];
+    const sparkActive: number[] = [];
+    const sparkCycle: number[] = [];
+    for (let i = sparkDays - 1; i >= 0; i--) {
+      const dayEnd = new Date(now);
+      dayEnd.setDate(now.getDate() - i);
+      dayEnd.setHours(23, 59, 59, 999);
+      const dayStart = new Date(dayEnd);
+      dayStart.setHours(0, 0, 0, 0);
+      sparkCompleted.push(countBetween(tasks, dayStart, dayEnd, (task) => safeDate(task.completedAt)));
+      sparkCreated.push(countBetween(tasks, dayStart, dayEnd, (task) => safeDate(task.createdAt)));
+      // Активная загрузка как snapshot — задачи, созданные до конца дня
+      // и ещё не завершённые до конца дня.
+      const activeAtEnd = tasks.filter((task) => {
+        const created = safeDate(task.createdAt);
+        if (!created || created > dayEnd) return false;
+        const completed = safeDate(task.completedAt);
+        return !completed || completed > dayEnd;
+      }).length;
+      sparkActive.push(activeAtEnd);
+      // Cycle-time за день: avg(дней) для задач, завершённых в этот день.
+      const dayCompleted = tasks.filter((task) => {
+        const completed = safeDate(task.completedAt);
+        return completed && completed >= dayStart && completed <= dayEnd;
+      });
+      const dayCycles = dayCompleted
+        .map((task) => {
+          const created = safeDate(task.createdAt);
+          const completed = safeDate(task.completedAt);
+          return created && completed ? (completed.getTime() - created.getTime()) / 86_400_000 : null;
+        })
+        .filter((value): value is number => value != null);
+      sparkCycle.push(
+        dayCycles.length
+          ? Math.round((dayCycles.reduce((sum, v) => sum + v, 0) / dayCycles.length) * 10) / 10
+          : 0,
+      );
+    }
     return {
       velocityPts: completedThisWeek,
       velocityChange: pctChange(completedThisWeek, completedPreviousWeek),
+      velocityFlat: completedThisWeek === completedPreviousWeek,
       cycleDays,
-      cycleChange: cycleDays > 0 ? "0%" : "0%",
-      throughputTasks: completedThisWeek,
+      cycleDaysThisWeek,
+      cycleDaysPrevWeek,
+      cycleChange: cycleChangeStr,
+      cycleImproved: cycleDeltaDays <= 0,
+      cycleFlat: cycleDeltaDays === 0,
+      throughputTasks: createdThisWeek,
       throughputChange: pctChange(createdThisWeek, createdPreviousWeek),
+      throughputFlat: createdThisWeek === createdPreviousWeek,
       bugRate: totalTasks ? Math.round((bugCount / totalTasks) * 100) : 0,
       overdue,
+      activeLoadCount,
+      activeLoadPct: totalTasks ? Math.round((activeLoadCount / totalTasks) * 100) : 0,
       sprintProgressPct,
       sprintCompleted: doneCount,
       sprintRemaining: Math.max(0, totalTasks - doneCount),
-      sprintDaysLeft: overdue,
+      totalTasks,
       categoryData,
       weeklyActivity,
       monthlyTrend,
@@ -511,24 +780,85 @@ export function AnalyticsPage() {
       burndown,
       teamRows,
       flowStages,
+      sparkCompleted,
+      sparkCreated,
+      sparkActive,
+      sparkCycle,
       flowSummary: {
         conv: totalTasks ? `${sprintProgressPct}%` : "0%",
         cycle: cycleDays ? `${cycleDays}d` : "0d",
         completed: String(doneCount),
       },
     };
-  }, [catLabels, currentWeekEnd, currentWeekStart, now, previousWeekStart, tasks]);
+  }, [currentWeekEnd, currentWeekStart, now, previousWeekStart, tasks, labels, ins]);
 
   const catData = analyticsData.categoryData;
 
-  const insightCards = [
-    { icon: "↑", color: "text-emerald-500 bg-emerald-500/10", text: ins.insightVelocity },
-    { icon: "⚠", color: "text-red-500 bg-red-500/10",         text: ins.insightBug },
-    { icon: "↓", color: "text-accent bg-accent/10",            text: ins.insightCycle },
-    { icon: "●", color: "text-amber-500 bg-amber-500/10",      text: ins.insightFocus },
-  ];
+  /**
+   * Computed insights — формируются ТОЛЬКО из реальных метрик.
+   * Раньше тут были статичные строки «velocity +12% to last sprint»,
+   * не зависящие от данных. Теперь же:
+   *  - velocity card меняет цвет/направление по WoW дельте;
+   *  - cycle card зелёный если время цикла улучшается;
+   *  - overdue card красный если есть просрочки, зелёный если нет;
+   *  - bug rate / load — в зависимости от порога.
+   */
+  const insightCards = useMemo(() => {
+    type InsightTone = "emerald" | "red" | "amber" | "accent";
+    const cards: { icon: string; tone: InsightTone; text: string }[] = [];
+    const tonePalette: Record<InsightTone, string> = {
+      emerald: "text-emerald-600 bg-emerald-500/10",
+      red: "text-red-500 bg-red-500/10",
+      amber: "text-amber-600 bg-amber-500/10",
+      accent: "text-accent bg-accent/10",
+    };
+    // ── Velocity ──
+    const velocityPct = Math.abs(parseInt(analyticsData.velocityChange.replace(/[^0-9-]/g, ""), 10) || 0);
+    if (analyticsData.velocityFlat) {
+      cards.push({ icon: "●", tone: "accent", text: ins.insightVelocityFlat });
+    } else if (analyticsData.velocityPts >= 0 && analyticsData.velocityChange.startsWith("+")) {
+      cards.push({ icon: "↑", tone: "emerald", text: ins.insightVelocityUp.replace("{pct}", String(velocityPct)) });
+    } else {
+      cards.push({ icon: "↓", tone: "red", text: ins.insightVelocityDown.replace("{pct}", String(velocityPct)) });
+    }
+    // ── Cycle time ──
+    if (analyticsData.cycleDays === 0) {
+      // Нет данных — пропускаем
+    } else if (analyticsData.cycleDays <= 3) {
+      cards.push({ icon: "⚡", tone: "emerald", text: ins.insightCycleFast.replace("{days}", String(analyticsData.cycleDays)) });
+    } else {
+      cards.push({ icon: "⏱", tone: "amber", text: ins.insightCycleSlow.replace("{days}", String(analyticsData.cycleDays)) });
+    }
+    // ── Overdue ──
+    if (analyticsData.overdue > 0) {
+      cards.push({ icon: "⚠", tone: "red", text: ins.insightOverdue.replace("{n}", String(analyticsData.overdue)) });
+    } else if (analyticsData.totalTasks > 0) {
+      cards.push({ icon: "✓", tone: "emerald", text: ins.insightNoOverdue });
+    }
+    // ── Bug rate ──
+    if (analyticsData.bugRate >= 5) {
+      cards.push({ icon: "🐞", tone: "red", text: ins.insightBug.replace("{pct}", String(analyticsData.bugRate)) });
+    } else if (analyticsData.totalTasks > 0) {
+      cards.push({ icon: "🛡", tone: "emerald", text: ins.insightBugLow });
+    }
+    // ── Workload ──
+    if (analyticsData.activeLoadPct >= 60) {
+      cards.push({ icon: "■", tone: "amber", text: ins.insightOverload.replace("{pct}", String(analyticsData.activeLoadPct)) });
+    } else if (analyticsData.totalTasks > 0) {
+      cards.push({ icon: "○", tone: "accent", text: ins.insightFlow.replace("{pct}", String(analyticsData.activeLoadPct)) });
+    }
+    return cards.slice(0, 4).map((c) => ({ icon: c.icon, color: tonePalette[c.tone], text: c.text }));
+  }, [analyticsData, ins]);
 
-  const flowStageLabels = [ins.stageCreated, ins.stageInProgress, ins.stageReview, ins.stageDone];
+  // Кумулятивные лейблы (Created / Started / Reached review / Completed)
+  // — не путать с snapshot-метками pie-чарта (Todo / In Progress / Review /
+  // Done). Здесь «Создано» = всего создано, «Начато» = вышли из todo и т.д.
+  const flowStageLabels = [
+    ins.stageCreated,
+    ins.funnelStarted,
+    ins.funnelReachedReview,
+    ins.funnelCompleted,
+  ];
 
   const monthlyTickInterval = isNarrow ? 2 : 0;
 
@@ -546,7 +876,7 @@ export function AnalyticsPage() {
           </div>
           <div className="min-w-0">
             <h1 className="m-0 text-xl font-bold tracking-tight sm:text-2xl">{ins.title}</h1>
-            <Text variant="muted" className="m-0 mt-0.5 text-sm">{ins.subtitle}</Text>
+            <Text color="muted" className="m-0 mt-0.5 text-sm">{ins.subtitle}</Text>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -555,27 +885,160 @@ export function AnalyticsPage() {
           </span>
           <button
             type="button"
-            className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium transition-colors hover:bg-[var(--surface-secondary)]"
+            onClick={handleRefresh}
+            disabled={refreshing || loading || !activeWorkspaceId}
+            className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium transition-colors hover:bg-[var(--surface-secondary)] disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {ins.export}
+            {refreshing
+              ? <Loading03Icon size={13} className="animate-spin" />
+              : <RefreshIcon size={13} strokeWidth={1.8} />}
+            {refreshing ? ins.refreshing : ins.refresh}
           </button>
         </div>
       </motion.div>
 
+      {/* ── No workspace ────────────────────────────────────────── */}
+      {!activeWorkspaceId && (
+        <Card>
+          <Card.Content className="flex flex-col items-center gap-3 px-6 py-12 text-center">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-accent/10">
+              <Analytics01Icon size={28} strokeWidth={1.4} className="text-accent" />
+            </div>
+            <Text className="m-0 text-base font-semibold">{ins.emptyTitle}</Text>
+            <Text color="muted" className="m-0 max-w-[420px] text-sm">{ins.emptyNoWorkspace}</Text>
+          </Card.Content>
+        </Card>
+      )}
+
+      {/* ── Loading skeleton ─────────────────────────────────────── */}
+      {loading && activeWorkspaceId && (
+        <div className="space-y-6">
+          <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-4">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Card key={i}>
+                <Card.Content className="flex flex-col gap-3 p-4">
+                  <div className="h-3 w-1/2 animate-pulse rounded bg-[var(--surface-secondary)]" />
+                  <div className="h-8 w-3/4 animate-pulse rounded bg-[var(--surface-secondary)]" />
+                  <div className="h-3 w-2/3 animate-pulse rounded bg-[var(--surface-secondary)]" />
+                  <div className="mt-2 h-10 w-full animate-pulse rounded bg-[var(--surface-secondary)]" />
+                </Card.Content>
+              </Card>
+            ))}
+          </div>
+          <Card>
+            <Card.Content className="p-4">
+              <div className="h-3 w-1/4 animate-pulse rounded bg-[var(--surface-secondary)]" />
+              <div className="mt-3 h-2 w-full animate-pulse rounded bg-[var(--surface-secondary)]" />
+            </Card.Content>
+          </Card>
+        </div>
+      )}
+
+      {/* ── Empty state (есть workspace, но 0 задач) ─────────────── */}
+      {!loading && activeWorkspaceId && tasks.length === 0 && (
+        <Card>
+          <Card.Content className="flex flex-col items-center gap-3 px-6 py-12 text-center">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-accent/10">
+              <Idea01Icon size={28} strokeWidth={1.4} className="text-accent" />
+            </div>
+            <Text className="m-0 text-base font-semibold">{ins.emptyTitle}</Text>
+            <Text color="muted" className="m-0 max-w-[460px] text-sm leading-relaxed">{ins.emptyBody}</Text>
+            <button
+              type="button"
+              onClick={() => router.push("/projects")}
+              className="mt-2 rounded-lg bg-accent px-4 py-2 text-xs font-semibold text-accent-foreground transition-[filter] hover:brightness-110"
+            >
+              {t.projects.title}
+            </button>
+          </Card.Content>
+        </Card>
+      )}
+
+      {/* ── Data sections — рендерим только когда есть workspace и задачи ── */}
+      {!loading && activeWorkspaceId && tasks.length > 0 && <>
+      {/* Stat cards с sparklines.
+       * Cycle: `up` инвертировано — рост cycleDays это плохо, поэтому
+       * передаём `up={cycleImproved}` (зелёный при уменьшении).
+       * Active load заменяет старый bugRate как productivity-метрика. */}
       <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-4">
-        <StatCard label={ins.velocity}   value={analyticsData.velocityPts} unit=" pts" sub={ins.velocitySub}   change={analyticsData.velocityChange} up delay={0.05} />
-        <StatCard label={ins.cycleTime}  value={analyticsData.cycleDays} unit=" d"  sub={ins.cycleTimeSub}  change={analyticsData.cycleChange}  up delay={0.1}  />
-        <StatCard label={ins.throughput} value={analyticsData.throughputTasks}           sub={ins.throughputSub}  change={analyticsData.throughputChange}  up delay={0.15} />
-        <StatCard label={ins.bugRate}    value={analyticsData.bugRate} unit="%" sub={ins.bugRateSub}     change={`${analyticsData.overdue}`} up={analyticsData.overdue === 0} delay={0.2} />
+        <StatCard
+          label={ins.velocity}
+          value={analyticsData.velocityPts}
+          unit=""
+          sub={analyticsData.velocityFlat ? ins.sameAsLast7 : ins.last7Days}
+          change={analyticsData.velocityChange}
+          up={analyticsData.velocityChange.startsWith("+") || analyticsData.velocityPts > 0}
+          neutral={analyticsData.velocityFlat}
+          spark={analyticsData.sparkCompleted}
+          sparkLabel={ins.completed}
+          accent="emerald"
+          icon={ArrowUpRight01Icon}
+          delay={0.05}
+        />
+        <StatCard
+          label={ins.cycleTime}
+          value={analyticsData.cycleDays}
+          unit="d"
+          sub={ins.cycleTimeSub}
+          change={analyticsData.cycleChange}
+          up={analyticsData.cycleImproved}
+          neutral={analyticsData.cycleFlat}
+          spark={analyticsData.sparkCycle}
+          sparkLabel={ins.cycleTime}
+          sparkValueFormat={(v) => `${v}${ins.days[0] ?? "d"}`}
+          accent="accent"
+          icon={FlowIcon}
+          delay={0.1}
+        />
+        <StatCard
+          label={ins.throughput}
+          value={analyticsData.throughputTasks}
+          unit=""
+          sub={ins.throughputSub}
+          change={analyticsData.throughputChange}
+          up={analyticsData.throughputChange.startsWith("+") || analyticsData.throughputTasks > 0}
+          neutral={analyticsData.throughputFlat}
+          spark={analyticsData.sparkCreated}
+          sparkLabel={ins.created}
+          accent="violet"
+          icon={Idea01Icon}
+          delay={0.15}
+        />
+        <StatCard
+          label={ins.activeLoad}
+          value={analyticsData.activeLoadCount}
+          unit=""
+          sub={ins.activeLoadSub}
+          change={`${analyticsData.activeLoadPct}%`}
+          up={analyticsData.activeLoadPct < 60}
+          neutral={analyticsData.activeLoadCount === 0}
+          spark={analyticsData.sparkActive}
+          sparkLabel={ins.activeLoad}
+          accent="amber"
+          icon={UserGroupIcon}
+          delay={0.2}
+        />
       </div>
 
+      {/* Workload progress — без хардкода «Sprint 14». Показывает
+       * прогресс по всем задачам workspace + overdue inline.
+       * Над progress-bar добавлена явная строка «X / Y completed»,
+       * чтобы абсолютные числа были видны рядом с процентом. */}
       <Card>
         <Card.Content className="p-4">
           <div className="flex flex-col gap-4 lg:flex-row lg:flex-wrap lg:items-center lg:justify-between">
             <div className="min-w-0 flex-1">
-              <Text variant="muted" className="m-0 text-xs font-semibold uppercase tracking-wider">
-                {ins.sprintProgress} — Sprint 14
-              </Text>
+              <div className="flex items-center justify-between gap-3">
+                <Text color="muted" className="m-0 text-xs font-semibold uppercase tracking-wider">
+                  {ins.workloadProgress}
+                </Text>
+                <span className="m-0 text-xs font-semibold tabular-nums text-[var(--foreground)]">
+                  {analyticsData.sprintCompleted}
+                  <span className="text-[var(--muted)]">{" / "}</span>
+                  {analyticsData.totalTasks}
+                  <span className="ml-1 text-[var(--muted)]">{ins.completed.toLowerCase()}</span>
+                </span>
+              </div>
               <div className="mt-2 flex flex-wrap items-center gap-3">
                 <div className="h-2 min-w-[120px] max-w-full flex-1 overflow-hidden rounded-full bg-[var(--surface-secondary)] sm:min-w-[200px]">
                   <motion.div
@@ -585,18 +1048,18 @@ export function AnalyticsPage() {
                     transition={{ type: "spring", stiffness: 80, damping: 20, delay: 0.3 }}
                   />
                 </div>
-                <span className="text-sm font-bold">{analyticsData.sprintProgressPct}% {ins.sprintDone}</span>
+                <span className="text-sm font-bold tabular-nums">{analyticsData.sprintProgressPct}% {ins.workloadDone}</span>
               </div>
             </div>
             <div className="grid grid-cols-3 gap-3 text-center sm:flex sm:gap-6 sm:text-left">
               {[
-                { v: analyticsData.sprintCompleted, l: ins.completed },
-                { v: analyticsData.sprintRemaining, l: ins.remaining },
-                { v: analyticsData.sprintDaysLeft,  l: ins.daysLeft  },
-              ].map(({ v, l }) => (
+                { v: analyticsData.sprintCompleted, l: ins.completed, color: "text-emerald-600" },
+                { v: analyticsData.sprintRemaining, l: ins.remaining, color: "" },
+                { v: analyticsData.overdue, l: ins.overdueLabel, color: analyticsData.overdue > 0 ? "text-red-500" : "" },
+              ].map(({ v, l, color }) => (
                 <div key={l}>
-                  <p className="m-0 text-lg font-bold tabular-nums sm:text-xl">{v}</p>
-                  <Text variant="muted" className="m-0 text-[11px]">{l}</Text>
+                  <p className={`m-0 text-lg font-bold tabular-nums sm:text-xl ${color}`}>{v}</p>
+                  <Text color="muted" className="m-0 text-[11px]">{l}</Text>
                 </div>
               ))}
             </div>
@@ -648,8 +1111,8 @@ export function AnalyticsPage() {
 
             <Card className="min-w-0 overflow-visible">
               <Card.Header>
-                <Card.Title>{ins.categories}</Card.Title>
-                <Card.Description>{ins.categoriesSub}</Card.Description>
+                <Card.Title>{ins.statusDistribution}</Card.Title>
+                <Card.Description>{ins.statusDistributionSub}</Card.Description>
               </Card.Header>
               <Card.Content className="overflow-visible px-2 pb-4 pt-0 sm:px-4">
                 <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:gap-6">
@@ -780,11 +1243,11 @@ export function AnalyticsPage() {
             <Card.Content className="px-4 pb-4 pt-0">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 {insightCards.map((c, i) => (
-                  <div key={i} className="flex items-start gap-3 rounded-xl border border-[var(--border)]/60 p-3.5">
-                    <span className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-sm font-bold ${c.color}`}>
-                      {c.icon}
+                  <div key={i} className="flex items-center gap-3 rounded-xl border border-[var(--border)]/60 p-3.5">
+                    <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg text-base font-bold leading-none ${c.color}`}>
+                      <span className="block leading-none">{c.icon}</span>
                     </span>
-                    <Text variant="muted" className="m-0 text-sm leading-relaxed">{c.text}</Text>
+                    <Text color="muted" className="m-0 flex-1 text-sm leading-relaxed">{c.text}</Text>
                   </div>
                 ))}
               </div>
@@ -870,7 +1333,7 @@ export function AnalyticsPage() {
                             </div>
                             <div className="min-w-0">
                               <span className="font-medium">{member.name}</span>
-                              <Text variant="muted" className="m-0 block truncate text-[11px]">{member.role}</Text>
+                              <Text color="muted" className="m-0 block truncate text-[11px]">{member.role}</Text>
                             </div>
                           </div>
                         </td>
@@ -902,19 +1365,19 @@ export function AnalyticsPage() {
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="m-0 font-semibold leading-tight">{member.name}</p>
-                      <Text variant="muted" className="m-0 text-xs">{member.role}</Text>
+                      <Text color="muted" className="m-0 text-xs">{member.role}</Text>
                       <div className="mt-3 grid grid-cols-3 gap-2 text-center">
                         <div>
                           <p className="m-0 text-lg font-bold tabular-nums">{member.done}</p>
-                          <Text variant="muted" className="m-0 text-[10px] uppercase">{ins.tasksDone}</Text>
+                          <Text color="muted" className="m-0 text-[10px] uppercase">{ins.tasksDone}</Text>
                         </div>
                         <div>
                           <p className="m-0 text-lg font-bold tabular-nums">{member.inProgress}</p>
-                          <Text variant="muted" className="m-0 text-[10px] uppercase">{ins.inProgress}</Text>
+                          <Text color="muted" className="m-0 text-[10px] uppercase">{ins.inProgress}</Text>
                         </div>
                         <div>
                           <p className="m-0 text-lg font-bold tabular-nums">{member.pts}</p>
-                          <Text variant="muted" className="m-0 text-[10px] uppercase">{ins.totalPts}</Text>
+                          <Text color="muted" className="m-0 text-[10px] uppercase">{ins.totalPts}</Text>
                         </div>
                       </div>
                     </div>
@@ -955,7 +1418,7 @@ export function AnalyticsPage() {
                     ].map(({ v, l }) => (
                       <div key={l}>
                         <p className="m-0 text-xl font-bold">{v}</p>
-                        <Text variant="muted" className="m-0 text-[11px]">{l}</Text>
+                        <Text color="muted" className="m-0 text-[11px]">{l}</Text>
                       </div>
                     ))}
                   </div>
@@ -965,6 +1428,7 @@ export function AnalyticsPage() {
           </Card>
         </motion.div>
       )}
+      </>}
     </div>
   );
 }

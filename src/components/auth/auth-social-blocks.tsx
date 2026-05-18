@@ -6,7 +6,7 @@ import { UserShield01Icon } from "hugeicons-react";
 
 /* ─── Brand icons (inline SVG — no icon-library dependency) ──────────────── */
 
-function GoogleIcon() {
+export function GoogleIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden>
       <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
@@ -17,7 +17,7 @@ function GoogleIcon() {
   );
 }
 
-function GitHubIcon() {
+export function GitHubIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
       <path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.44 9.8 8.21 11.39.6.11.82-.26.82-.58v-2.23c-3.34.72-4.03-1.42-4.03-1.42-.55-1.39-1.34-1.76-1.34-1.76-1.09-.74.08-.73.08-.73 1.21.09 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.49 1 .11-.78.42-1.3.76-1.6-2.66-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23.96-.27 1.98-.4 3-.4s2.04.13 3 .4c2.29-1.55 3.3-1.23 3.3-1.23.66 1.66.24 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.63-5.48 5.92.43.37.82 1.1.82 2.22v3.29c0 .32.19.69.8.58C20.56 21.8 24 17.3 24 12 24 5.37 18.63 0 12 0z" />
@@ -83,16 +83,81 @@ function AppleIcon() {
   );
 }
 
+/**
+ * Активные провайдеры OAuth. Раньше держали 4-ой набор (Google, GitHub,
+ * Yandex, Apple) в сетке 2×2, но по продуктовому решению оставляем
+ * только Google и GitHub — два самых востребованных для нашей аудитории.
+ * Yandex/Apple-иконки оставлены в файле как готовые компоненты на
+ * случай возврата (без runtime-стоимости — tree-shake уберёт неиспользуемое).
+ */
 const OAUTH_PROVIDERS = [
   { id: "google" as const, labelKey: "oauthGoogle" as const, Icon: GoogleIcon },
   { id: "github" as const, labelKey: "oauthGithub" as const, Icon: GitHubIcon },
-  { id: "yandex" as const, labelKey: "oauthYandex" as const, Icon: YandexIcon },
-  { id: "apple" as const, labelKey: "oauthApple" as const, Icon: AppleIcon },
 ];
 
-function oauthStub(provider: string) {
+/**
+ * Старт OAuth flow для известного провайдера. Реализован по схеме:
+ *
+ *   1. Frontend  GET  /api/auth/oauth-authorize?provider=google&redirect_uri=...
+ *      → BFF проксирует на FastAPI GET /auth/oauth/oauth_google/authorize
+ *      → backend возвращает `authorize_url` (https://accounts.google.com/...)
+ *
+ *   2. Frontend  window.location.assign(authorize_url)
+ *      → юзер логинится у провайдера, провайдер редиректит на
+ *      `${origin}/oauth/callback?code=...&state=...&provider=...`.
+ *
+ *   3. Callback-страница `/oauth/callback`:
+ *      → POST /api/auth/oauth-login { provider, code, redirectUri }
+ *      → BFF проксирует в FastAPI POST /auth/login/oauth, кладёт токены
+ *        в httpOnly cookies, возвращает { user };
+ *      → callback-страница router.replace("/workspace").
+ *
+ * `next` сохраняется в sessionStorage и подмешивается в callback после
+ * успешного логина (если backend не примет — фоллбэк на /workspace).
+ */
+async function startOAuth(provider: "google" | "github") {
+  if (typeof window === "undefined") return;
+
+  // Куда вернуть юзера после успешного OAuth — сохраняем в sessionStorage,
+  // потому что redirect_uri должен быть _точно_ как в провайдер-консоли,
+  // и `?next=` его ломает (Google проверяет точное совпадение).
+  const next = window.location.pathname + window.location.search;
+  try {
+    sessionStorage.setItem("oauth.next", next);
+    sessionStorage.setItem("oauth.provider", provider);
+  } catch {
+    // sessionStorage может быть недоступен (private mode на iOS) —
+    // не ломаем flow, просто потеряем `next` (юзер пойдёт на /workspace).
+  }
+
+  const redirectUri = `${window.location.origin}/oauth/callback`;
+  const qs = new URLSearchParams({ provider, redirect_uri: redirectUri });
+
+  try {
+    const res = await fetch(`/api/auth/oauth-authorize?${qs.toString()}`, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    });
+    const json = (await res.json()) as
+      | { success: true; data: { authorize_url: string } }
+      | { success: false; error: { message?: string } };
+
+    if (!res.ok || !("data" in json)) {
+      const msg = ("error" in json && json.error?.message) || "OAuth init failed";
+      console.error("[oauth] authorize failed:", msg);
+      return;
+    }
+
+    window.location.assign(json.data.authorize_url);
+  } catch (err) {
+    console.error("[oauth] authorize error:", err);
+  }
+}
+
+function samlStub() {
   if (typeof window !== "undefined") {
-    console.info(`[auth stub] OAuth: ${provider}`);
+    console.info(`[auth stub] OAuth: saml`);
   }
 }
 
@@ -108,7 +173,7 @@ export function OAuthButtonRow() {
         <button
           key={id}
           type="button"
-          onClick={() => oauthStub(id)}
+          onClick={() => startOAuth(id)}
           className="flex h-9 w-full items-center justify-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 text-[12px] font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--surface-secondary)] active:scale-[0.98]"
         >
           <Icon />
@@ -127,7 +192,7 @@ export function SamlSsoStub() {
   return (
     <button
       type="button"
-      onClick={() => oauthStub("saml")}
+      onClick={samlStub}
       className="flex h-11 w-full items-center justify-center gap-2.5 rounded-xl border border-[var(--border)] bg-[var(--surface)] text-[13px] font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--surface-secondary)]"
     >
       <UserShield01Icon size={17} strokeWidth={1.75} className="text-accent" aria-hidden />

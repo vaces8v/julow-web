@@ -238,6 +238,93 @@ body {
   to { opacity: 1; }
 }
 
+/* ── Auth shader hero — Sunlight Bars (CSS-реализация JulowShader) ──
+ * `julow-bars`: медленно «прокатывает» repeating-linear-gradient'ы
+ *   диагонально (по их собственному 200%×200% полю).
+ * `julow-bars-reverse`: контр-направление поверх, лёгкая интерференция.
+ * `julow-sun` / `julow-sun-cool`: тёплый/холодный блики «дышат» в
+ *   противоположных фазах.
+ * Все триггерятся через `motion-safe:` варианты в Tailwind, поэтому
+ * автоматически выключаются на `prefers-reduced-motion: reduce`.
+ * ──────────────────────────────────────────────────────────────────── */
+@keyframes julow-bars {
+  from { background-position: 0% 0%, 0% 0%; }
+  to   { background-position: 100% 100%, 100% 100%; }
+}
+@keyframes julow-bars-reverse {
+  from { background-position: 100% 0%; }
+  to   { background-position: 0% 100%; }
+}
+@keyframes julow-sun {
+  from { opacity: 0.85; transform: translate3d(0, 0, 0) scale(1); }
+  to   { opacity: 1;    transform: translate3d(-1.5%, 1%, 0) scale(1.04); }
+}
+@keyframes julow-sun-cool {
+  from { opacity: 0.7;  transform: translate3d(0, 0, 0) scale(1); }
+  to   { opacity: 0.95; transform: translate3d(1.5%, -1%, 0) scale(1.05); }
+}
+
+/* ── Landing cinematic shader — slow spin for conic/radial glow ── */
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+.animate-spin-slow {
+  animation: spin-slow 20s linear infinite;
+}
+
+/* ── Landing floating icons ── */
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-12px); }
+}
+
+/* ───────────────────────────────────────────────────────────────────
+ * Migrated L-web → Julow landing styles
+ *
+ * Поднимает в Tailwind v4 свойство `font-display` (→ Raleway), нужно
+ * для всех заголовков лендинга. И добавляет анимации, которые
+ * в исходном проекте жили инлайном в `<style jsx>` блоках.
+ * ──────────────────────────────────────────────────────────────────── */
+
+@theme {
+  --font-display: var(--font-raleway);
+}
+
+@keyframes floatMesh1 {
+  0%   { transform: scale(1)    translate(0, 0); }
+  100% { transform: scale(1.08) translate(30px, -30px); }
+}
+@keyframes floatMesh2 {
+  0%   { transform: scale(1)   translate(0, 0); }
+  100% { transform: scale(1.1) translate(-40px, -15px); }
+}
+@keyframes floatMesh3 {
+  0%   { transform: scale(1)    translate(0, 0); }
+  100% { transform: scale(1.08) translate(-20px, 35px); }
+}
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Landing использует фиксированную "колонку" — container с двумя
+ * вертикальными бордерами по краям. На viewport ≥ 1280px ширина 1280,
+ * иначе 100% с отступами. Совпадает с `landing/app/globals.css`. */
+@media (max-width: 1279px) {
+  .landing-container {
+    max-width: 100% !important;
+    width: 100% !important;
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
+  }
+}
+@media (min-width: 1280px) {
+  .landing-container {
+    max-width: 1280px !important;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   ::view-transition-old(*),

@@ -22,6 +22,13 @@ function ClickEffect({
   disabled = false,
 }: ClickEffectProps) {
   const [items, setItems] = React.useState<Item[]>([]);
+  // Откладываем рендер портала до завершения гидратации.
+  // Без этого `typeof window`-ветка приводит к hydration mismatch:
+  // сервер вставляет `<script id="_R_">`, клиент — `<div>`-портал.
+  const [mounted, setMounted] = React.useState(false);
+  React.useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const removeItem = React.useCallback(
     (id: string) => setItems((prev) => prev.filter((it) => it.id !== id)),
@@ -54,7 +61,7 @@ function ClickEffect({
     return () => (el as any).removeEventListener("pointerup", onPointerUp);
   }, [scope, disabled]);
 
-  if (typeof window === "undefined") return null;
+  if (!mounted) return null;
 
   const d = duration / 1000;
 
