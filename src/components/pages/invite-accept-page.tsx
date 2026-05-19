@@ -247,7 +247,7 @@ export function InviteAcceptPage({
             href={`/login?redirect=${encodeURIComponent(`/invite/${token}`)}`}
             className="block"
           >
-            <Button color="primary" size="md" className="w-full">
+            <Button variant="primary" size="md" className="w-full">
               {T.signInToAccept}
               <ArrowRight01Icon size={14} strokeWidth={1.8} />
             </Button>
@@ -255,11 +255,10 @@ export function InviteAcceptPage({
         ) : (
           <>
             <Button
-              color="primary"
+              variant="primary"
               size="md"
               className="w-full"
               onPress={() => void handleAccept()}
-              isLoading={accepting}
               isDisabled={accepting}
             >
               {accepting ? T.accepting : T.accept}

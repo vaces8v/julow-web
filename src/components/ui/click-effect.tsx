@@ -52,7 +52,11 @@ function ClickEffect({
         ) return;
       }
 
-      setItems((prev) => [...prev, { id: crypto.randomUUID(), x: e.clientX, y: e.clientY }]);
+      const id =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `c-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      setItems((prev) => [...prev, { id, x: e.clientX, y: e.clientY }]);
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -265,11 +265,9 @@ export function ProjectSettingsDialog({
                 </AnimatePresence>
               </div>
               <Button
-                color="primary"
                 size="sm"
                 onPress={handleSaveGeneral}
                 isDisabled={!canSaveGeneral}
-                isLoading={isSaving}
               >
                 {isSaving ? copy.settingsGeneralSaving : copy.settingsGeneralSave}
               </Button>
@@ -320,16 +318,14 @@ export function ProjectSettingsDialog({
 
         <DialogFooter>
           <DialogClose asChild>
-            <Button variant="light" size="sm" isDisabled={isDeleting}>
+            <Button size="sm" isDisabled={isDeleting}>
               {copy.settingsCancel}
             </Button>
           </DialogClose>
           <Button
-            color="danger"
             size="sm"
             onPress={handleDelete}
             isDisabled={!canDelete}
-            isLoading={isDeleting}
           >
             {isDeleting ? copy.settingsDeleteProcessing : copy.settingsDeleteButton}
           </Button>

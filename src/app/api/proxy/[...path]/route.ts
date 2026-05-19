@@ -47,10 +47,10 @@ interface RouteContext {
   params: Promise<{ path: string[] }>;
 }
 
-async function readBody(req: NextRequest): Promise<ArrayBuffer | null> {
+async function readBody(req: NextRequest): Promise<Uint8Array | null> {
   if (req.method === "GET" || req.method === "HEAD") return null;
   const buf = await req.arrayBuffer();
-  return buf.byteLength === 0 ? null : buf;
+  return buf.byteLength === 0 ? null : new Uint8Array(buf);
 }
 
 function buildHeaders(req: NextRequest, accessToken: string | null): Headers {
@@ -67,17 +67,36 @@ async function forwardOnce(
   upstreamUrl: string,
   method: string,
   headers: Headers,
-  body: ArrayBuffer | null,
+  body: Uint8Array | null,
 ): Promise<Response> {
-  return fetch(upstreamUrl, {
+  const res = await fetch(upstreamUrl, {
     method,
     headers,
-    body,
+    body: body as BodyInit | null,
     cache: "no-store",
-    // `follow` — нам нужно догнать редиректы upstream'а внутри сервера,
-    // чтобы клиенту никогда не приходил 308 на cross-origin URL без cookies.
-    redirect: "follow",
+    // `manual` — обрабатываем редиректы сами, чтобы не терять body
+    // (ArrayBuffer detach при redirect:follow для POST/PUT/PATCH).
+    redirect: "manual",
   });
+
+  // Следуем за 3xx редиректами вручную, пересоздавая body.
+  if (res.status >= 300 && res.status < 400) {
+    const location = res.headers.get("location");
+    if (location) {
+      const redirectUrl = location.startsWith("http")
+        ? location
+        : new URL(location, upstreamUrl).toString();
+      return fetch(redirectUrl, {
+        method,
+        headers,
+        body: body as BodyInit | null,
+        cache: "no-store",
+        redirect: "manual",
+      });
+    }
+  }
+
+  return res;
 }
 
 async function passthrough(
@@ -124,11 +143,12 @@ async function handle(
 ): Promise<NextResponse> {
   const { path } = await ctx.params;
   const segments = path.map((s) => encodeURIComponent(s)).join("/");
-  // Сохраняем хвостовой `/` — FastAPI регистрирует роуты вида `/workspaces/`
-  // и без слэша возвращает 308 redirect, который потом утекает на клиента.
-  const trailing = req.nextUrl.pathname.endsWith("/") ? "/" : "";
+  // Backend-роуты зарегистрированы без trailing slash.
+  // При redirect (307) Node.js fetch с redirect:follow пытается
+  // переиспользовать ArrayBuffer тела, но оно detached → crash.
+  // Решение: не добавляем trailing slash и используем redirect:manual.
   const search = req.nextUrl.search;
-  const upstreamUrl = `${BACKEND_BASE_URL}/${segments}${trailing}${search}`;
+  const upstreamUrl = `${BACKEND_BASE_URL}/${segments}${search}`;
 
   const access = req.cookies.get(ACCESS_COOKIE)?.value ?? null;
   const refresh = req.cookies.get(REFRESH_COOKIE)?.value ?? null;

@@ -561,7 +561,7 @@ export function ProjectMembersDialog({
 
         <DialogFooter>
           <DialogClose asChild>
-            <Button variant="light" size="sm">
+            <Button size="sm">
               {T.close}
             </Button>
           </DialogClose>
@@ -647,15 +647,13 @@ function ConfirmDialog({
 
         <DialogFooter>
           <DialogClose asChild>
-            <Button variant="light" size="sm" isDisabled={loading}>
+            <Button size="sm" isDisabled={loading}>
               {cancelLabel}
             </Button>
           </DialogClose>
           <Button
-            color="danger"
             size="sm"
             onPress={onConfirm}
-            isLoading={loading}
             isDisabled={loading}
           >
             {confirmLabel}
@@ -852,7 +850,7 @@ function InvitationsSection({
         </div>
         <p className="mt-2 text-[11px] text-[var(--muted)]/80">{T.inviteLinkExpiresHint}</p>
         <div className="mt-4 flex justify-end">
-          <Button size="md" onPress={() => void onGenerateLink()} isLoading={generatingLink}>
+          <Button size="md" onPress={() => void onGenerateLink()} isDisabled={generatingLink}>
             <Add01Icon size={14} strokeWidth={1.8} />
             {generatingLink ? T.inviteLinkGenerating : T.inviteLinkGenerate}
           </Button>

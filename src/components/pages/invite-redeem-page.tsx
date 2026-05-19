@@ -108,7 +108,7 @@ export function InviteRedeemPage() {
           className="h-11 w-full rounded-xl border border-[var(--border)]/60 bg-[var(--surface-secondary)]/40 px-4 font-mono text-[13.5px] outline-none transition-all focus:border-accent/70 focus:bg-[var(--surface)] focus:ring-2 focus:ring-accent/15"
         />
         {error && <p className="text-[11.5px] text-red-500">{error}</p>}
-        <Button color="primary" type="submit" size="md" className="w-full">
+        <Button variant="primary" type="submit" size="md" className="w-full">
           {T.submit}
           <ArrowRight01Icon size={14} strokeWidth={1.8} />
         </Button>

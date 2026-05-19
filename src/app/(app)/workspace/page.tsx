@@ -594,7 +594,6 @@ export default function Home() {
                 size="sm"
                 onPress={() => void handleJoin()}
                 isDisabled={!joinCode.trim() || joining || joinedOk}
-                isLoading={joining}
               >
                 {joinedOk ? (
                   <>
