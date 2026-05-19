@@ -2,9 +2,12 @@
  * MobileOnlyPrompt — экран-заглушка для мобильных устройств.
  *
  * Web-версия заточена под десктопы (sidebar, таблицы, kanban, графики),
- * на мобильном UX будет резко хуже. Поэтому на узких экранах вместо
- * приложения показываем экран с приглашением скачать мобильное приложение
- * + iPhone/Android-моки из magicui для визуального якоря.
+ * на мобильном UX будет резко хуже. Поэтому на узких экранах внутри
+ * `(app)/*` вместо приложения показываем экран с приглашением скачать
+ * Android-приложение в виде APK + iPhone/Android-моки для визуального якоря.
+ *
+ * iOS / Play Store CTA убраны намеренно — пока что нативные сторы не
+ * подключены, прямая ссылка на APK даёт реальный путь установки на Android.
  */
 
 "use client";
@@ -14,6 +17,14 @@ import { motion } from "motion/react";
 import { Iphone } from "@/components/ui/iphone";
 import { Android } from "@/components/ui/android";
 import { useI18n } from "@/i18n/context";
+
+/**
+ * Путь до APK-файла в `public/`. Меняется при обновлении сборки —
+ * держим как константу, чтобы не дублировать имя файла по компонентам.
+ */
+const ANDROID_APK_HREF =
+  "/application-402dca64-c5a0-40b8-9c67-df530c661e47.apk";
+const ANDROID_APK_DOWNLOAD_NAME = "julow.apk";
 
 export function MobileOnlyPrompt() {
   const { t } = useI18n();
@@ -101,44 +112,38 @@ export function MobileOnlyPrompt() {
             {m.body}
           </p>
 
-          {/* Store buttons (placeholders — пока приложения нет, кнопки disabled) */}
+          {/*
+           * Android APK download CTA. Single button — App Store / Play Market
+           * убраны до публикации в сторах. `download` атрибут просит браузер
+           * сохранить файл, а не открывать; на iOS Safari всё равно покажет
+           * "не поддерживается" — это нормально, страница для Android.
+           */}
           <div className="mt-2 flex w-full flex-col items-stretch gap-2.5 sm:flex-row sm:justify-center">
-            <button
-              type="button"
-              disabled
-              className="group inline-flex items-center justify-center gap-2.5 rounded-2xl border border-white/15 bg-white/5 px-5 py-3 text-left text-white/70 backdrop-blur transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-70"
+            <a
+              href={ANDROID_APK_HREF}
+              download={ANDROID_APK_DOWNLOAD_NAME}
+              className="group inline-flex items-center justify-center gap-3 rounded-2xl border border-emerald-400/30 bg-emerald-500/15 px-6 py-3.5 text-left text-white shadow-[0_18px_44px_-18px_rgba(16,185,129,0.55)] backdrop-blur transition-colors hover:bg-emerald-500/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300/70"
             >
-              <svg viewBox="0 0 24 24" className="h-6 w-6 fill-current" aria-hidden>
-                <path d="M17.06 12.96c-.03-2.62 2.14-3.88 2.24-3.94-1.22-1.78-3.12-2.03-3.8-2.05-1.62-.16-3.16.95-3.99.95-.83 0-2.1-.93-3.45-.9-1.78.03-3.42 1.03-4.33 2.62-1.85 3.2-.47 7.92 1.33 10.51.88 1.27 1.93 2.7 3.31 2.65 1.33-.05 1.83-.86 3.43-.86 1.6 0 2.05.86 3.45.83 1.43-.03 2.33-1.3 3.2-2.57 1.01-1.47 1.43-2.9 1.45-2.97-.03-.01-2.78-1.07-2.81-4.27ZM14.5 5.05c.74-.9 1.24-2.14 1.1-3.38-1.06.04-2.36.7-3.13 1.6-.69.78-1.3 2.05-1.13 3.27 1.18.09 2.4-.6 3.16-1.49Z" />
-              </svg>
-              <span className="flex flex-col leading-tight">
-                <span className="text-[10px] font-medium uppercase tracking-wider opacity-70">
-                  {m.appStoreEyebrow}
-                </span>
-                <span className="text-sm font-semibold text-white">
-                  {m.appStore}
-                </span>
-              </span>
-            </button>
-
-            <button
-              type="button"
-              disabled
-              className="group inline-flex items-center justify-center gap-2.5 rounded-2xl border border-white/15 bg-white/5 px-5 py-3 text-left text-white/70 backdrop-blur transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-70"
-            >
-              <svg viewBox="0 0 24 24" className="h-6 w-6 fill-current" aria-hidden>
+              <svg
+                viewBox="0 0 24 24"
+                className="h-7 w-7 shrink-0 fill-current text-emerald-300"
+                aria-hidden
+              >
                 <path d="M3.61 1.81c-.3.32-.47.81-.47 1.45v17.48c0 .64.17 1.13.47 1.45l.06.06 9.78-9.79v-.23L3.67 1.75l-.06.06ZM17.04 14.61l-3.27-3.28v-.23l3.27-3.27.07.04 3.87 2.2c1.1.63 1.1 1.66 0 2.29l-3.87 2.2-.07.05ZM17.11 14.56 13.78 11.22 3.94 21.06c.36.39.96.43 1.63.06l11.54-6.56" />
                 <path d="M17.11 7.78 5.57 1.21c-.67-.38-1.27-.33-1.63.06l9.84 9.84 3.33-3.33Z" />
               </svg>
               <span className="flex flex-col leading-tight">
-                <span className="text-[10px] font-medium uppercase tracking-wider opacity-70">
-                  {m.googlePlayEyebrow}
+                <span className="text-[10px] font-medium uppercase tracking-[0.18em] text-emerald-200/80">
+                  {m.androidApkEyebrow}
                 </span>
-                <span className="text-sm font-semibold text-white">
-                  {m.googlePlay}
+                <span className="text-base font-semibold text-white">
+                  {m.androidApk}
+                </span>
+                <span className="mt-0.5 text-[11px] text-white/60">
+                  {m.androidApkSub}
                 </span>
               </span>
-            </button>
+            </a>
           </div>
 
           <p className="m-0 mt-3 text-xs text-white/50">{m.comingSoon}</p>

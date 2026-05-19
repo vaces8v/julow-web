@@ -39,3 +39,11 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Mobile build artifacts (too large for GitHub — distribute via Releases / CDN).
+# We accidentally committed a 142 MB APK once; never again.
+*.apk
+*.aab
+*.ipa
+*.apk.idsig
+public/application-*.apk

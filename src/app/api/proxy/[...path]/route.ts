@@ -43,6 +43,18 @@ const HOP_BY_HOP = new Set([
   "content-length",
 ]);
 
+/**
+ * Достаём Bearer-токен из заголовка `Authorization: Bearer ...` исходного
+ * запроса. Используется как fallback для клиентов, у которых нет cookie на
+ * нашем домене (мобильные приложения).
+ */
+function extractBearer(req: NextRequest): string | null {
+  const raw = req.headers.get("authorization") ?? req.headers.get("Authorization");
+  if (!raw) return null;
+  const match = /^Bearer\s+(.+)$/i.exec(raw.trim());
+  return match ? match[1].trim() : null;
+}
+
 interface RouteContext {
   params: Promise<{ path: string[] }>;
 }
@@ -152,9 +164,13 @@ async function handle(
 
   const access = req.cookies.get(ACCESS_COOKIE)?.value ?? null;
   const refresh = req.cookies.get(REFRESH_COOKIE)?.value ?? null;
+  // Fallback: клиенты без cookie (мобильное приложение) могут передать
+  // Bearer-токен в заголовке `Authorization`. Cookie имеет приоритет, чтобы
+  // браузерный поток не сломался.
+  const bearer = access ? null : extractBearer(req);
 
   // Если клиент вообще не авторизован — сразу 401, не дёргаем бэкенд.
-  if (!access && !refresh) {
+  if (!access && !refresh && !bearer) {
     return NextResponse.json(
       {
         success: false,
@@ -165,7 +181,7 @@ async function handle(
   }
 
   const body = await readBody(req);
-  let headers = buildHeaders(req, access);
+  let headers = buildHeaders(req, access ?? bearer);
   let upstream = await forwardOnce(upstreamUrl, req.method, headers, body);
 
   // Прозрачный refresh при 401
