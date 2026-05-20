@@ -23,7 +23,7 @@ import { useI18n } from "@/i18n/context";
  * держим как константу, чтобы не дублировать имя файла по компонентам.
  */
 const ANDROID_APK_HREF =
-  "/application-402dca64-c5a0-40b8-9c67-df530c661e47.apk";
+  "/application-446d26fc-dc0b-44c4-b9ce-1c8a15eae43d.apk";
 const ANDROID_APK_DOWNLOAD_NAME = "julow.apk";
 
 export function MobileOnlyPrompt() {
