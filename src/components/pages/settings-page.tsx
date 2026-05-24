@@ -252,6 +252,7 @@ function AccountSection() {
   const s = t.settings;
   const [user, setUser] = useState<UserPayload | null>(null);
   const [profile, setProfile] = useState<ProfilePayload | null>(null);
+  const [displayName, setDisplayName] = useState("");
   const [bio, setBio] = useState("");
   const [savingState, setSavingState] = useState<"idle" | "saving" | "ok" | "error">("idle");
 
@@ -272,6 +273,7 @@ function AccountSection() {
         if (cancelled) return;
         setUser(userPayload);
         setProfile(profilePayload);
+        setDisplayName(profilePayload?.displayName ?? "");
         setBio(profilePayload?.bio ?? "");
       });
     return () => { cancelled = true; };
@@ -288,7 +290,7 @@ function AccountSection() {
     return () => { cancelled = true; };
   }, []);
 
-  const dirty = bio !== (profile?.bio ?? "");
+  const dirty = bio !== (profile?.bio ?? "") || displayName !== (profile?.displayName ?? "");
 
   const handleSave = async () => {
     if (!dirty) return;
@@ -296,7 +298,10 @@ function AccountSection() {
     try {
       // Бэкенд игнорирует undefined-поля, поэтому jobTitle не передаём —
       // UI больше это поле не показывает и разрешать его редактировать не нужно.
-      await api.updatePersonalInfo({ bio });
+      await api.updatePersonalInfo({
+        displayName: displayName !== (profile?.displayName ?? "") ? displayName : undefined,
+        bio: bio !== (profile?.bio ?? "") ? bio : undefined,
+      });
       const fresh = await api.getMyProfile().catch(() => profile);
       if (fresh) setProfile(fresh);
       setSavingState("ok");
@@ -318,8 +323,8 @@ function AccountSection() {
     }
   };
 
-  const displayName = user?.email.split("@")[0] ?? "—";
-  const initials = initialsFrom(displayName);
+  const shownName = displayName.trim() || user?.email.split("@")[0] || "—";
+  const initials = initialsFrom(shownName);
 
   return (
     <div className="space-y-8">
@@ -330,7 +335,7 @@ function AccountSection() {
           {initials}
         </div>
         <div>
-          <p className="m-0 font-semibold">{displayName}</p>
+          <p className="m-0 font-semibold">{shownName}</p>
           <Text color="muted" className="m-0 text-sm">{user?.email ?? "—"}</Text>
         </div>
       </div>
@@ -338,6 +343,14 @@ function AccountSection() {
       <Separator />
 
       <div className="space-y-5">
+        <Field label={s.profileDisplayName ?? "Display name"} hint={s.profileDisplayNameHint ?? "Visible in meetings, chats, and projects"}>
+          <TextInput
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+            maxLength={255}
+            placeholder={user?.email.split("@")[0] ?? ""}
+          />
+        </Field>
         <Field label={s.profileEmail}>
           <TextInput value={user?.email ?? ""} readOnly disabled />
         </Field>

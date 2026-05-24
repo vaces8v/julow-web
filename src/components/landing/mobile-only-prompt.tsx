@@ -12,6 +12,7 @@
 
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { motion } from "motion/react";
 import { Iphone } from "@/components/ui/iphone";
@@ -60,9 +61,10 @@ export function MobileOnlyPrompt() {
         >
           <Link
             href="/"
-            className="text-lg font-bold tracking-tight text-white/90 transition-opacity hover:opacity-80"
+            className="flex items-center gap-2 text-lg font-bold tracking-tight text-white/90 transition-opacity hover:opacity-80"
           >
-            julow
+            <Image src="/logo.png" alt="Julow" width={28} height={28} className="h-7 w-7 object-contain" />
+            Julow
           </Link>
         </motion.div>
 

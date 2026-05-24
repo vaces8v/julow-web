@@ -1090,6 +1090,24 @@ function TaskDetail({
    * в кэше остаётся `null`, и UI показывает короткий UUID-fallback.
    */
   const [userEmails, setUserEmails] = useState<Record<string, string | null>>({});
+  const [wsMemberNames, setWsMemberNames] = useState<Record<string, string>>({});
+
+  const { activeWorkspaceId } = useWorkspaceShell();
+
+  // Load workspace member display names (enriched from Profile BC).
+  useEffect(() => {
+    if (!activeWorkspaceId) return;
+    let cancelled = false;
+    api.getWorkspaceMembers(activeWorkspaceId).then((members) => {
+      if (cancelled) return;
+      const names: Record<string, string> = {};
+      for (const m of members) {
+        if (m.displayName) names[m.userId] = m.displayName;
+      }
+      setWsMemberNames(names);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [activeWorkspaceId]);
 
   // Загружаем детали + комментарии при смене task.id (история убрана —
   // её показ перегружал слайд-овер и редко использовался)
@@ -1138,8 +1156,8 @@ function TaskDetail({
     return () => { cancelled = true; };
   }, [detail?.assigneeIds, comments, userEmails]);
 
-  /** Человекочитаемая метка для user-id: email если известен, иначе короткий UUID. */
-  const userLabel = (uid: string): string => userEmails[uid] ?? `${uid.slice(0, 8)}…`;
+  /** Человекочитаемая метка для user-id: displayName → email → короткий UUID. */
+  const userLabel = (uid: string): string => wsMemberNames[uid] ?? userEmails[uid] ?? `${uid.slice(0, 8)}…`;
 
   const inferAttachmentType = (file: File): "image" | "video" | "file" => {
     const type = file.type.toLowerCase();

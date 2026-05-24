@@ -33,6 +33,7 @@ import { AuthThemeToggle } from "@/components/auth/auth-theme-toggle";
 import { LocaleSwitcher } from "@/components/ui/locale-switcher";
 import { AuthShaderHero } from "@/components/auth/auth-shader-hero";
 import { useI18n } from "@/i18n/context";
+import Image from "next/image";
 import Link from "next/link";
 
 export function AuthShell({
@@ -65,13 +66,18 @@ export function AuthShell({
           под краем panel'а на узких экранах. */}
       <Link
         href="/"
-        className="absolute top-5 left-6 z-30 text-[15px] font-black tracking-tight text-white no-underline drop-shadow-[0_2px_18px_rgba(0,0,0,0.45)] sm:left-10"
-        style={{
-          fontFamily: "var(--font-inter), sans-serif",
-          letterSpacing: "-0.02em",
-        }}
+        className="absolute top-5 left-6 z-30 flex items-center gap-2 no-underline drop-shadow-[0_2px_18px_rgba(0,0,0,0.45)] sm:left-10"
       >
-        JULOW
+        <Image src="/logo.png" alt="Julow" width={28} height={28} className="h-7 w-7 object-contain" />
+        <span
+          className="text-[15px] font-black tracking-tight text-white"
+          style={{
+            fontFamily: "var(--font-inter), sans-serif",
+            letterSpacing: "-0.02em",
+          }}
+        >
+          JULOW
+        </span>
       </Link>
 
       {/* ─────────── ОВЕРЛЕЙ: контролы (право-верх) ───────────

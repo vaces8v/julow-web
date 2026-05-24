@@ -1,6 +1,8 @@
 import { notFound } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { MobileGate } from "@/components/landing/mobile-gate";
+import { LiveMeetingProvider } from "@/components/live-meeting-context";
+import { MeetingPip } from "@/components/meeting-pip";
 import { getServerUser } from "@/lib/server/get-server-user";
 import { isMobileUserAgent } from "@/lib/server/is-mobile-ua";
 
@@ -30,7 +32,10 @@ export default async function ProtectedLayout({
   const defaultIsMobile = await isMobileUserAgent();
   return (
     <MobileGate defaultIsMobile={defaultIsMobile}>
-      <AppShell>{children}</AppShell>
+      <LiveMeetingProvider>
+        <AppShell>{children}</AppShell>
+        <MeetingPip />
+      </LiveMeetingProvider>
     </MobileGate>
   );
 }

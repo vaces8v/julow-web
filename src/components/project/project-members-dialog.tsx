@@ -44,6 +44,7 @@ import {
   type ProjectPayload,
   type ProjectRolePayload,
   type UserPayload,
+  type WorkspaceMemberPayload,
 } from "@/lib/api";
 
 // ── Локальный i18n словарь ──
@@ -262,6 +263,7 @@ export function ProjectMembersDialog({
   const [roles, setRoles] = useState<ProjectRolePayload[]>([]);
   const [invitations, setInvitations] = useState<ProjectInvitationPayload[]>([]);
   const [userCache, setUserCache] = useState<Record<string, UserPayload>>({});
+  const [wsMemberNames, setWsMemberNames] = useState<Record<string, string>>({});
 
   // Link-приглашение (без max_uses в UI — всегда одноразовая)
   const [linkRoleId, setLinkRoleId] = useState("");
@@ -313,14 +315,24 @@ export function ProjectMembersDialog({
       //     роли просто не отобразятся в строке участника, всё остальное
       //     работает.
       //   - invitations: только для владельца, и так в try/catch.
-      const [mRes, rRes, invRes] = await Promise.allSettled([
+      const [mRes, rRes, invRes, wsRes] = await Promise.allSettled([
         api.getProjectMembers(workspaceId, project.id),
         api.getProjectRoles(workspaceId, project.id),
         isOwner
           ? api.getProjectInvitations(workspaceId, project.id)
           : Promise.resolve([] as ProjectInvitationPayload[]),
+        api.getWorkspaceMembers(workspaceId),
       ]);
       if (cancelled) return;
+
+      // Build display name map from workspace members (enriched by Profile BC).
+      if (wsRes.status === "fulfilled") {
+        const names: Record<string, string> = {};
+        for (const wm of wsRes.value) {
+          if (wm.displayName) names[wm.userId] = wm.displayName;
+        }
+        setWsMemberNames(names);
+      }
 
       if (mRes.status === "fulfilled") {
         setMembers(mRes.value);
@@ -435,7 +447,7 @@ export function ProjectMembersDialog({
   /** Показать подтверждение перед удалением — реальный API-вызов в `confirmPendingAction`. */
   const handleRemoveMember = (userId: string) => {
     const u = userCache[userId];
-    const label = u?.email ?? userId;
+    const label = wsMemberNames[userId] ?? u?.email ?? userId;
     setPendingAction({ kind: "remove-member", userId, label });
   };
 
@@ -538,6 +550,7 @@ export function ProjectMembersDialog({
             currentUserId={user?.id}
             isOwner={isOwner}
             userCache={userCache}
+            wsMemberNames={wsMemberNames}
             onChangeRole={handleChangeRole}
             onRemove={handleRemoveMember}
           />
@@ -674,6 +687,7 @@ function MembersSection({
   currentUserId,
   isOwner,
   userCache,
+  wsMemberNames,
   onChangeRole,
   onRemove,
 }: {
@@ -684,6 +698,7 @@ function MembersSection({
   currentUserId?: string;
   isOwner: boolean;
   userCache: Record<string, UserPayload>;
+  wsMemberNames: Record<string, string>;
   onChangeRole: (userId: string, newRoleId: string) => Promise<void>;
   /** Открывает ConfirmDialog в родителе; синхронно. Реальный вызов API — в confirmPendingAction. */
   onRemove: (userId: string) => void;
@@ -702,7 +717,7 @@ function MembersSection({
           const isProjectOwner = ownerIds.includes(m.userId);
           const isMe = currentUserId === m.userId;
           const u = userCache[m.userId];
-          const displayName = u?.email ?? m.userId;
+          const displayName = wsMemberNames[m.userId] ?? u?.email ?? m.userId;
           const role = roles.find((r) => r.id === m.roleId);
           // Право менять/удалять: только владелец, и нельзя трогать самого
           // себя и других владельцев.

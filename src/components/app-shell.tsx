@@ -35,6 +35,7 @@ import {
   subscribeSystemTheme,
   type Theme,
 } from "@/lib/theme";
+import Image from "next/image";
 import Link from "next/link";
 import { motion, AnimatePresence } from "motion/react";
 import { WorkspaceShellProvider, useWorkspaceShell } from "@/components/workspace-shell-context";
@@ -78,13 +79,11 @@ function BrandLogo({ onClose }: { onClose: () => void }) {
 
   return (
     <div
-      className="flex items-center gap-2.5 px-3 mb-8"
+      className="flex items-center gap-0 px-1 mb-8"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent text-accent-foreground text-sm font-bold">
-        J
-      </div>
+      <Image src="/logo.png" alt="Julow" width={100} height={100} className="h-11 w-11 shrink-0 rounded-lg object-contain" />
       <span
         className="flex items-baseline text-lg font-bold tracking-tight leading-none"
         style={{ fontFamily: "var(--font-inter), sans-serif" }}

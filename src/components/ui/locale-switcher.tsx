@@ -21,11 +21,24 @@ export function LocaleSwitcher({ variant = "app" }: { variant?: LocaleSwitcherVa
     if (!el) return;
     const r = el.getBoundingClientRect();
     const width = Math.max(168, r.width);
-    setMenuPos({
-      top: r.bottom + 8,
-      left: r.right - width,
-      width,
-    });
+    const gap = 8;
+    // Приблизительная высота выпадающего меню: кол-во локалей × высота строки + padding
+    const estimatedHeight = LOCALES.length * 40 + 16;
+
+    // По умолчанию открываем вниз. Если внизу не хватает места — flip вверх.
+    let top = r.bottom + gap;
+    if (top + estimatedHeight > window.innerHeight - gap) {
+      top = r.top - estimatedHeight - gap;
+    }
+    // Если и вверху не помещается (очень маленький экран), прижимаем к верху
+    if (top < gap) top = gap;
+
+    // Горизонталь: правый край к правому краю триггера, clamp в viewport
+    let left = r.right - width;
+    if (left < gap) left = gap;
+    if (left + width > window.innerWidth - gap) left = window.innerWidth - width - gap;
+
+    setMenuPos({ top, left, width });
   }, []);
 
   /**

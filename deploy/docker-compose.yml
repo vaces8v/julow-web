@@ -144,6 +144,12 @@ services:
       CLAMAV_HOST: clamav
       CLAMAV_PORT: 3310
 
+      # LiveKit
+      LIVEKIT_URL: http://livekit:7880
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-devkey}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-secret1234567890secret1234567890}
+      LIVEKIT_PUBLIC_URL: ${LIVEKIT_PUBLIC_URL:-ws://localhost:7880}
+
       # OAuth
       OAUTH_GOOGLE_CLIENT_ID: ${OAUTH_GOOGLE_CLIENT_ID:-}
       OAUTH_GOOGLE_CLIENT_SECRET: ${OAUTH_GOOGLE_CLIENT_SECRET:-}
@@ -237,6 +243,26 @@ services:
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── LiveKit (WebRTC SFU) ─────────────────────────────────────────────────────
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: julow-livekit
+    restart: unless-stopped
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "7100-7110:7100-7110/udp"
+    command: >
+      --config /etc/livekit.yaml
+      --dev
+    volumes:
+      - ../../julow_backend/livekit.yaml:/etc/livekit.yaml:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:7880"]
+      interval: 10s
       timeout: 3s
       retries: 5
 

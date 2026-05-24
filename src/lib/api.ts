@@ -271,6 +271,7 @@ export interface MeetingPayload {
   location?: string;
   conferenceUrl?: string;
   conferenceProvider: string;
+  conferenceRoomId?: string;
   workspaceId: string;
   projectId?: string;
   organizerId: string;
@@ -465,6 +466,7 @@ export interface UserPayload {
 export interface ProfilePayload {
   id: string;
   userId: string;
+  displayName?: string;
   avatarUrl?: string;
   bio?: string;
   jobTitle?: string;
@@ -1021,6 +1023,7 @@ interface BackendMeeting {
   location?: string | null;
   conference_provider: string;
   conference_url?: string | null;
+  conference_room_id?: string | null;
   workspace_id: string;
   project_id?: string | null;
   organizer_id: string;
@@ -1042,6 +1045,7 @@ function mapMeeting(b: BackendMeeting): MeetingPayload {
     location: b.location ?? undefined,
     conferenceUrl: b.conference_url ?? undefined,
     conferenceProvider: b.conference_provider,
+    conferenceRoomId: b.conference_room_id ?? undefined,
     workspaceId: b.workspace_id,
     projectId: b.project_id ?? undefined,
     organizerId: b.organizer_id,
@@ -1744,6 +1748,7 @@ export const api = {
     type BackendProfile = {
       id: string;
       user_id: string;
+      display_name?: string | null;
       avatar_url?: string | null;
       bio?: string | null;
       job_title?: string | null;
@@ -1754,6 +1759,7 @@ export const api = {
     return {
       id: res.data.id,
       userId: res.data.user_id,
+      displayName: res.data.display_name ?? undefined,
       avatarUrl: res.data.avatar_url ?? undefined,
       bio: res.data.bio ?? undefined,
       jobTitle: res.data.job_title ?? undefined,
@@ -1769,10 +1775,12 @@ export const api = {
    * Бэкенд: `PATCH /profile/me/personal-info`.
    */
   updatePersonalInfo: async (payload: {
+    displayName?: string;
     bio?: string;
     jobTitle?: string;
   }): Promise<void> => {
     const body: Record<string, unknown> = {};
+    if (payload.displayName !== undefined) body.display_name = payload.displayName;
     if (payload.bio !== undefined) body.bio = payload.bio;
     if (payload.jobTitle !== undefined) body.job_title = payload.jobTitle;
     await apiPatch("/profile/me/personal-info", body);
@@ -3055,6 +3063,7 @@ export const api = {
     title: string;
     description?: string;
     meetingType?: string;
+    conferenceProvider?: string;
     scheduledAt?: string;
     durationMinutes?: number;
     location?: string;
@@ -3065,7 +3074,8 @@ export const api = {
     const res = await apiPost<BackendMeeting>("/meetings/", {
       title: payload.title,
       description: payload.description,
-      meeting_type: payload.meetingType ?? "sync",
+      meeting_type: payload.meetingType ?? "video_call",
+      conference_provider: payload.conferenceProvider ?? "internal",
       workspace_id: payload.workspaceId,
       project_id: payload.projectId,
       scheduled_at: payload.scheduledAt,

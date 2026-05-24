@@ -12,6 +12,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useMemo } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -129,7 +130,8 @@ export function Navbar() {
       <nav className="fixed top-4 left-1/2 -translate-x-1/2 z-50 h-[56px] w-[calc(100%-2rem)] max-w-[1100px] rounded-full flex items-center bg-zinc-50/80 backdrop-blur-2xl backdrop-saturate-150 border border-white/10">
         <div className="w-full flex items-center justify-between px-4 sm:px-6 h-full">
           {/* Left: Logo */}
-          <Link href="/" className="flex items-center shrink-0">
+          <Link href="/" className="flex items-center gap-2 shrink-0">
+            <Image src="/logo.png" alt="Julow" width={24} height={24} className="h-6 w-6 object-contain" />
             <span className="font-display text-base font-semibold tracking-tight text-zinc-900">
               Julow
             </span>
@@ -280,7 +282,8 @@ export function Navbar() {
               className="fixed top-0 right-0 bottom-0 w-[85vw] max-w-[360px] bg-white z-[70] md:hidden flex flex-col shadow-2xl"
             >
               <div className="flex items-center justify-between px-6 py-5 border-b border-zinc-100">
-                <span className="font-display text-lg font-semibold tracking-tight text-zinc-900">
+                <span className="flex items-center gap-2 font-display text-lg font-semibold tracking-tight text-zinc-900">
+                  <Image src="/logo.png" alt="Julow" width={24} height={24} className="h-6 w-6 object-contain" />
                   Julow
                 </span>
                 <button

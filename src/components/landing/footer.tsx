@@ -11,6 +11,7 @@
 
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useMemo } from "react";
 import { useI18n } from "@/i18n/context";
@@ -72,8 +73,9 @@ export function Footer() {
       <div className="container mx-auto px-4 border-l border-r border-zinc-200/80">
         <div className="py-16 md:py-20 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-12">
           <div className="lg:col-span-2">
-            <Link href="/">
-              <span className="font-display text-2xl font-bold tracking-tight mb-4 block text-zinc-900">
+            <Link href="/" className="flex items-center gap-2.5 mb-4">
+              <Image src="/logo.png" alt="Julow" width={32} height={32} className="h-8 w-8 object-contain" />
+              <span className="font-display text-2xl font-bold tracking-tight text-zinc-900">
                 Julow
               </span>
             </Link>
