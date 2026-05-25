@@ -17,6 +17,16 @@ import { useI18n } from "@/i18n/context";
 import { ChatVideoPlayer } from "@/components/chat-video-player";
 import { FileTypeIcon, extOf } from "@/lib/file-icon";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { LinkifiedText } from "@/components/ui/linkified-text";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useWorkspaceShell } from "@/components/workspace-shell-context";
 import { setActiveChatId } from "@/lib/active-chat";
 import { api, type ChatPayload, type MessagePayload } from "@/lib/api";
@@ -210,6 +220,12 @@ export function ChatsPage() {
    * пузырём в конце ленты с pulse-анимацией. Сбрасывается в finally.
    */
   const [outgoingDraft, setOutgoingDraft] = useState<{ text: string; files: File[] } | null>(null);
+  /**
+   * URL, по которому пользователь кликнул в сообщении и который ждёт
+   * подтверждения перехода во всплывающем окне. Не храним
+   * `null` в URL-виде — `Dialog` открывается, когда значение истинное.
+   */
+  const [linkConfirmUrl, setLinkConfirmUrl] = useState<string | null>(null);
   /**
    * id сообщения, для которого ещё идёт upload вложений. Пока он задан,
    * скрываем «реальный» пузырь из `messagesByChat` (он может прилететь
@@ -838,7 +854,11 @@ export function ChatsPage() {
                       : "rounded-tl-md bg-[var(--surface-secondary)] text-[var(--foreground)]"
                   }`}
                 >
-                  {m.content ? <p className="m-0 whitespace-pre-wrap break-words">{m.content}</p> : null}
+                  {m.content ? (
+                    <p className="m-0 whitespace-pre-wrap break-words">
+                      <LinkifiedText text={m.content} onLinkClick={setLinkConfirmUrl} />
+                    </p>
+                  ) : null}
                   {imageAttachments.length > 0 ? (
                     <div className="mt-1.5 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
                       {imageAttachments.map((a) => (
@@ -948,7 +968,9 @@ export function ChatsPage() {
                 </div>
                 <div className="max-w-[min(100%,420px)] min-w-0 rounded-2xl rounded-tr-md bg-accent/70 px-3.5 py-2 text-sm leading-relaxed text-accent-foreground">
                   {outgoingDraft.text ? (
-                    <p className="m-0 whitespace-pre-wrap break-words opacity-90">{outgoingDraft.text}</p>
+                    <p className="m-0 whitespace-pre-wrap break-words opacity-90">
+                      <LinkifiedText text={outgoingDraft.text} onLinkClick={setLinkConfirmUrl} />
+                    </p>
                   ) : null}
                   {outgoingDraft.files.length > 0 ? (
                     <OutgoingDraftFiles files={outgoingDraft.files} />
@@ -1162,6 +1184,46 @@ export function ChatsPage() {
           />
         )}
       </AnimatePresence>
+
+      {/* Модальное окно подтверждения перехода по ссылке из чата.
+          Ссылки в сообщениях рендерятся как `<button>` и открывают этот диалог,
+          чтобы пользователь явно подтвердил переход на внешний ресурс. */}
+      <Dialog
+        open={linkConfirmUrl !== null}
+        onOpenChange={(o) => { if (!o) setLinkConfirmUrl(null); }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{c.linkConfirmTitle}</DialogTitle>
+            <DialogDescription>{c.linkConfirmDesc}</DialogDescription>
+          </DialogHeader>
+          {linkConfirmUrl ? (
+            <div className="rounded-lg border border-[var(--border)]/60 bg-[var(--surface-secondary)]/40 px-3 py-2 text-[12px] text-[var(--foreground)] break-all">
+              {linkConfirmUrl}
+            </div>
+          ) : null}
+          <DialogFooter className="flex gap-2 pt-2">
+            <DialogClose asChild>
+              <Button variant="secondary" size="sm">{c.linkConfirmCancel}</Button>
+            </DialogClose>
+            <Button
+              variant="primary"
+              size="sm"
+              onPress={() => {
+                const url = linkConfirmUrl;
+                setLinkConfirmUrl(null);
+                if (url) {
+                  // `noopener,noreferrer` — безопасный новый таб,
+                  // предотвращает транзитивную проблему reverse-tabnabbing.
+                  window.open(url, "_blank", "noopener,noreferrer");
+                }
+              }}
+            >
+              {c.linkConfirmOpen}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

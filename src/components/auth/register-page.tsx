@@ -19,7 +19,7 @@ import { Checkbox } from "@heroui/react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { ViewIcon, ViewOffIcon } from "hugeicons-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useMemo, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 
@@ -44,6 +44,7 @@ export function RegisterPage() {
   const { t } = useI18n();
   const a = t.auth;
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { register: registerUser, login, isRegistering } = useAuth();
 
   const strengthLabels = useMemo(
@@ -100,10 +101,15 @@ export function RegisterPage() {
           password: values.password,
           isRememberMe: false,
         });
-        router.replace("/workspace");
+        const next = searchParams.get("redirect") ?? "/workspace";
+        router.replace(next);
         router.refresh();
       } catch {
-        router.replace("/login?notice=registered");
+        const redirectParam = searchParams.get("redirect");
+        const loginUrl = redirectParam
+          ? `/login?notice=registered&redirect=${encodeURIComponent(redirectParam)}`
+          : "/login?notice=registered";
+        router.replace(loginUrl);
       }
     } catch (err) {
       if (err instanceof ApiError) {
@@ -322,7 +328,7 @@ export function RegisterPage() {
         <p className="text-center text-[13px] text-[var(--muted)]">
           {a.haveAccount}{" "}
           <Link
-            href="/login"
+            href={searchParams.get("redirect") ? `/login?redirect=${encodeURIComponent(searchParams.get("redirect")!)}` : "/login"}
             className="font-semibold text-accent underline-offset-2 hover:underline"
           >
             {a.signIn}

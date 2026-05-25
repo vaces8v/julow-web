@@ -72,15 +72,23 @@ export function proxy(req: NextRequest): NextResponse {
   const hasSession = hasAccess || hasRefresh;
 
   if (isPublic(pathname)) {
-    // Залогиненного с auth-страницы уводим в приложение
+    // Залогиненного с auth-страницы уводим в приложение.
+    // Если передан ?redirect=… — используем его (например, пользователь
+    // уже залогинен и открыл /login?redirect=/invite/TOKEN — сразу
+    // перенаправляем на принятие приглашения).
     if (
       hasSession &&
       (pathname === "/login" ||
         pathname === "/register" ||
         pathname.startsWith("/login/"))
     ) {
+      const redirect = req.nextUrl.searchParams.get("redirect");
       const url = req.nextUrl.clone();
-      url.pathname = "/workspace";
+      if (redirect && redirect.startsWith("/")) {
+        url.pathname = redirect;
+      } else {
+        url.pathname = "/workspace";
+      }
       url.search = "";
       return NextResponse.redirect(url);
     }

@@ -4,14 +4,18 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
   type ReactNode,
 } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { LiveKitRoom, RoomAudioRenderer } from "@livekit/components-react";
 import "@livekit/components-styles";
+import { DisconnectReason, VideoPresets } from "livekit-client";
+import { toast } from "@/components/ui/toast";
+import { useI18n } from "@/i18n/context";
 import { api } from "@/lib/api";
 
 /* ── Public API ───────────────────────────────────────────────── */
@@ -65,12 +69,28 @@ export const useLiveMeeting = () => useContext(LiveMeetingCtx);
  */
 export function LiveMeetingProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
+  const { t } = useI18n();
+  const m = t.meetings;
 
   const [meetingId, setMeetingId] = useState<string | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [serverUrl, setServerUrl] = useState(LIVEKIT_URL);
   const [justLeft, setJustLeft] = useState(false);
   const intentionalLeaveRef = useRef(false);
+  const lastMeetingIdRef = useRef<string | null>(null);
+
+  const resetMeetingState = useCallback(() => {
+    setMeetingId(null);
+    setToken(null);
+    setServerUrl(LIVEKIT_URL);
+  }, []);
+
+  useEffect(() => {
+    if (meetingId) {
+      lastMeetingIdRef.current = meetingId;
+    }
+  }, [meetingId]);
 
   const isFullScreen = useMemo(() => {
     if (!meetingId) return false;
@@ -88,6 +108,8 @@ export function LiveMeetingProvider({ children }: { children: ReactNode }) {
         if (res.accessToken) {
           const url = res.joinUrl || LIVEKIT_URL;
           intentionalLeaveRef.current = false;
+          lastMeetingIdRef.current = id;
+          setJustLeft(false);
           setMeetingId(id);
           setToken(res.accessToken);
           setServerUrl(url);
@@ -104,21 +126,39 @@ export function LiveMeetingProvider({ children }: { children: ReactNode }) {
   const leave = useCallback(() => {
     intentionalLeaveRef.current = true;
     setJustLeft(true);
-    setMeetingId(null);
-    setToken(null);
-    setServerUrl(LIVEKIT_URL);
-  }, []);
+    resetMeetingState();
+  }, [resetMeetingState]);
 
   const clearJustLeft = useCallback(() => {
     setJustLeft(false);
   }, []);
 
-  const handleDisconnected = useCallback(() => {
-    // Server-side disconnect or network failure — clear state.
-    setMeetingId(null);
-    setToken(null);
-    setServerUrl(LIVEKIT_URL);
-  }, []);
+  const handleDisconnected = useCallback((reason?: DisconnectReason) => {
+    const disconnectedMeetingId = lastMeetingIdRef.current ?? meetingId;
+    const wasIntentional = intentionalLeaveRef.current;
+
+    intentionalLeaveRef.current = false;
+
+    if (reason === DisconnectReason.ROOM_DELETED) {
+      setJustLeft(true);
+    }
+
+    resetMeetingState();
+
+    if (wasIntentional) {
+      return;
+    }
+
+    if (reason === DisconnectReason.ROOM_DELETED) {
+      toast.info(m.roomEndedTitle, {
+        description: m.roomEndedByOrganizer,
+        id: disconnectedMeetingId ? `meeting-ended-${disconnectedMeetingId}` : undefined,
+      });
+      if (disconnectedMeetingId && pathname === `/meetings/${disconnectedMeetingId}/room`) {
+        router.replace("/meetings");
+      }
+    }
+  }, [m.roomEndedByOrganizer, m.roomEndedTitle, meetingId, pathname, resetMeetingState, router]);
 
   const value = useMemo<LiveMeetingState>(
     () => ({ meetingId, token, serverUrl, isFullScreen, justLeft, join, leave, clearJustLeft }),
@@ -138,8 +178,19 @@ export function LiveMeetingProvider({ children }: { children: ReactNode }) {
         options={{
           adaptiveStream: true,
           dynacast: true,
+          audioCaptureDefaults: {
+            autoGainControl: true,
+            echoCancellation: true,
+            noiseSuppression: true,
+          },
+          publishDefaults: {
+            videoEncoding: VideoPresets.h720.encoding,
+            videoSimulcastLayers: [VideoPresets.h540, VideoPresets.h216],
+            simulcast: true,
+            degradationPreference: "balanced",
+          },
           videoCaptureDefaults: {
-            resolution: { width: 1280, height: 720, frameRate: 30 },
+            resolution: VideoPresets.h720.resolution,
           },
         }}
       >

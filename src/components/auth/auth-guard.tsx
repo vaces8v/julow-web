@@ -1,7 +1,7 @@
 "use client";
 
 import { useAuth } from "@/components/auth/auth-context";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
 
 const AUTH_PATHS = ["/login", "/register"];
@@ -27,13 +27,15 @@ export function AuthGuard({ children }: { children: ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
   const pathname = usePathname();
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   useEffect(() => {
     if (isLoading) return;
     if (isAuthenticated && isAuthRoute(pathname)) {
-      router.replace("/workspace");
+      const redirect = searchParams.get("redirect");
+      router.replace(redirect ?? "/workspace");
     }
-  }, [isAuthenticated, isLoading, pathname, router]);
+  }, [isAuthenticated, isLoading, pathname, router, searchParams]);
 
   // Промежуточное состояние «у клиента ещё нет user, но cookie была на сервере».
   // Случается редко и кратко (stale access + жив refresh) — показываем дочерний контент,

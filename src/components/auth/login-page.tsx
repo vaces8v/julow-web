@@ -266,7 +266,7 @@ export function LoginPage() {
         <p className="text-center text-[13px] text-[var(--muted)]">
           {a.noAccount}{" "}
           <Link
-            href="/register"
+            href={searchParams.get("redirect") ? `/register?redirect=${encodeURIComponent(searchParams.get("redirect")!)}` : "/register"}
             className="font-semibold text-accent underline-offset-2 hover:underline"
           >
             {a.createOneFree}
