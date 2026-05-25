@@ -458,6 +458,16 @@ export interface UserPayload {
   updatedAt: string;
 }
 
+export interface PublicProfilePayload {
+  id: string;
+  userId: string;
+  avatarUrl?: string;
+  bio?: string;
+  jobTitle?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /**
  * Расширенный профиль текущего пользователя из Profile BC
  * (`GET /profile/me`). В отличие от `UserPayload` (Identity BC), содержит
@@ -1760,6 +1770,28 @@ export const api = {
       id: res.data.id,
       userId: res.data.user_id,
       displayName: res.data.display_name ?? undefined,
+      avatarUrl: res.data.avatar_url ?? undefined,
+      bio: res.data.bio ?? undefined,
+      jobTitle: res.data.job_title ?? undefined,
+      createdAt: res.data.created_at,
+      updatedAt: res.data.updated_at,
+    };
+  },
+
+  getPublicProfile: async (userId: string): Promise<PublicProfilePayload> => {
+    type BackendPublicProfile = {
+      id: string;
+      user_id: string;
+      avatar_url?: string | null;
+      bio?: string | null;
+      job_title?: string | null;
+      created_at: string;
+      updated_at: string;
+    };
+    const res = await apiGet<BackendPublicProfile>(`/profile/${userId}`);
+    return {
+      id: res.data.id,
+      userId: res.data.user_id,
       avatarUrl: res.data.avatar_url ?? undefined,
       bio: res.data.bio ?? undefined,
       jobTitle: res.data.job_title ?? undefined,

@@ -6,6 +6,9 @@ import {
   DatePicker,
   Input,
   Label,
+  ListBox,
+  ListBoxItem,
+  Select,
   Text,
   TimeField,
 } from "@heroui/react";
@@ -29,11 +32,72 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { toast } from "@/components/ui/toast";
 import { useRouter } from "next/navigation";
 import { useI18n } from "@/i18n/context";
 import { useWorkspaceShell } from "@/components/workspace-shell-context";
 import { useLiveMeeting } from "@/components/live-meeting-context";
-import { api, type MeetingPayload } from "@/lib/api";
+import { api, type MeetingPayload, type ProjectPayload } from "@/lib/api";
+import { ApiError } from "@/lib/api-client";
+import { subscribeWsEvent } from "@/lib/ws-client";
+
+function ProjectSelect({
+  value,
+  onChange,
+  projects,
+  placeholder,
+  disabled,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  projects: ProjectPayload[];
+  placeholder: string;
+  disabled: boolean;
+}) {
+  const [portalContainer, setPortalContainer] = useState<HTMLElement | null>(null);
+  const handleContainerRef = useCallback((node: HTMLDivElement | null) => {
+    setPortalContainer(node?.closest("[data-slot='dialog-content']") as HTMLElement | null);
+  }, []);
+  const all =
+    value && !projects.find((p) => p.id === value)
+      ? [{ id: value, name: value } as ProjectPayload, ...projects]
+      : projects;
+  const current = all.find((p) => p.id === value);
+  return (
+    <div ref={handleContainerRef} className="w-full">
+      <Select
+        selectedKey={value}
+        onSelectionChange={(key) => {
+          if (key != null) onChange(String(key));
+        }}
+        isDisabled={disabled}
+        className="w-full"
+      >
+        <Select.Trigger className="flex h-10 w-full items-center justify-between gap-2 rounded-xl border border-[var(--border)]/60 bg-[var(--surface)] px-3 text-left text-sm text-[var(--foreground)] outline-none transition-colors hover:bg-[var(--surface-secondary)]/50 disabled:opacity-60">
+          <Select.Value className="min-w-0 flex-1 truncate">{current?.name ?? placeholder}</Select.Value>
+          <ArrowDown01Icon size={16} strokeWidth={1.9} className="shrink-0 text-[var(--muted)]" />
+        </Select.Trigger>
+        <Select.Popover
+          UNSTABLE_portalContainer={portalContainer ?? undefined}
+          className="z-50 min-w-[var(--trigger-width)] rounded-xl border border-[var(--border)]/60 bg-[var(--surface)] p-1 shadow-lg"
+        >
+          <ListBox className="max-h-64 overflow-auto outline-none">
+            {all.map((p) => (
+              <ListBoxItem
+                key={p.id}
+                id={p.id}
+                textValue={p.name}
+                className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs text-[var(--foreground)] outline-none hover:bg-[var(--surface-secondary)] data-[selected]:bg-accent/10 data-[selected]:text-accent"
+              >
+                {p.name}
+              </ListBoxItem>
+            ))}
+          </ListBox>
+        </Select.Popover>
+      </Select>
+    </div>
+  );
+}
 
 function AccordionBlock({
   title,
@@ -115,6 +179,11 @@ export function MeetingsPage() {
   const [scheduleTitle, setScheduleTitle] = useState("");
   const [scheduleDateVal, setScheduleDateVal] = useState<CalendarDate | null>(null);
   const [scheduleTimeVal, setScheduleTimeVal] = useState<Time | null>(null);
+  // Project selection (mandatory): video meetings can only be created inside
+  // a project so that all project members are auto-invited and notified.
+  const [projects, setProjects] = useState<ProjectPayload[]>([]);
+  const [newRoomProjectId, setNewRoomProjectId] = useState<string>("");
+  const [scheduleProjectId, setScheduleProjectId] = useState<string>("");
   const timeZone = getLocalTimeZone();
 
   // ── Real meetings state ──────────────────────────────────────
@@ -132,6 +201,32 @@ export function MeetingsPage() {
 
   useEffect(() => {
     api.getMe().then((u) => setCurrentUserId(u.id)).catch(() => { });
+  }, []);
+
+  // Список проектов текущего пользователя — обязательный контекст
+  // для видеовстреч: все участники выбранного проекта будут
+  // приглашены в комнату.
+  useEffect(() => {
+    let cancelled = false;
+    api.getMyProjects().then((list) => {
+      if (cancelled) return;
+      setProjects(list);
+    }).catch(() => { });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Realtime: бэкенд публикует `notification.created` для каждого
+  // участника, когда встреча создана / обновлена. Любое meeting-* /
+  // meeting_-уведомление обновляет список встреч.
+  useEffect(() => {
+    const unsub = subscribeWsEvent("notification.created", (payload) => {
+      const p = payload as { notification_type?: string } | null;
+      const t = (p?.notification_type ?? "").toLowerCase();
+      if (t.startsWith("meeting_") || t.includes("meeting")) {
+        setRefreshKey((k) => k + 1);
+      }
+    });
+    return unsub;
   }, []);
 
   /**
@@ -173,6 +268,16 @@ export function MeetingsPage() {
     return d.toLocaleString(tag, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   }, [locale]);
 
+  const formatMeetingStatus = useCallback((status?: string) => {
+    const s = (status ?? "").toLowerCase();
+    if (s === "draft") return m.statusDraft;
+    if (s === "scheduled") return m.statusScheduled;
+    if (s === "in_progress") return m.statusInProgress;
+    if (s === "completed") return m.statusCompleted;
+    if (s === "cancelled") return m.statusCancelled;
+    return status ?? "—";
+  }, [m.statusCancelled, m.statusCompleted, m.statusDraft, m.statusInProgress, m.statusScheduled]);
+
   const handleJoinMeeting = useCallback(
     (meetingId: string) => {
       router.push(`/meetings/${meetingId}/room`);
@@ -180,24 +285,77 @@ export function MeetingsPage() {
     [router],
   );
 
+  const showMeetingCreateError = useCallback((err: unknown) => {
+    if (err instanceof ApiError) {
+      if (err.code === "INSUFFICIENT_MEETING_CREATE_PERMISSIONS") {
+        toast.error(m.createFailedTitle, {
+          description: m.createPermissionDenied,
+        });
+        return;
+      }
+      toast.error(m.createFailedTitle, {
+        description: err.detail ?? m.createFailedDescription,
+      });
+      return;
+    }
+    if (err instanceof Error) {
+      toast.error(m.createFailedTitle, {
+        description: err.message || m.createFailedDescription,
+      });
+      return;
+    }
+    toast.error(m.createFailedTitle, {
+      description: m.createFailedDescription,
+    });
+  }, [m.createFailedDescription, m.createFailedTitle, m.createPermissionDenied]);
+
+  /**
+   * Собирает всех активных участников проекта — бекенд добавит
+   * каждого как `MeetingParticipant`, что инициирует ин-апп уведомление
+   * (`MeetingParticipantAdded` → `OnMeetingParticipantAddedNotify`).
+   * Организатор (текущий пользователь) исключается — бэкенд
+   * автоматически регистрирует его в `Meeting.create()`.
+   */
+  const fetchProjectParticipantIds = useCallback(
+    async (workspaceId: string, projectId: string): Promise<string[]> => {
+      try {
+        const members = await api.getProjectMembers(workspaceId, projectId);
+        return members
+          .filter((member) => member.isActive !== false)
+          .map((member) => member.userId)
+          .filter((id): id is string => Boolean(id) && id !== currentUserId);
+      } catch {
+        return [];
+      }
+    },
+    [currentUserId],
+  );
+
   const handleCreateInstantRoom = useCallback(async () => {
-    if (!activeWorkspaceId) return;
+    if (!activeWorkspaceId || !newRoomProjectId) return;
     const title = newRoomName.trim() || m.newRoom;
     try {
+      const participantIds = await fetchProjectParticipantIds(
+        activeWorkspaceId,
+        newRoomProjectId,
+      );
       const meeting = await api.createMeeting({
         workspaceId: activeWorkspaceId,
+        projectId: newRoomProjectId,
         title,
         meetingType: "video_call",
+        participantIds,
       });
       await api.startMeeting(meeting.id).catch(() => { });
       setNewRoomName("");
+      setNewRoomProjectId("");
       setNewRoomOpen(false);
       setRefreshKey((k) => k + 1);
       handleJoinMeeting(meeting.id);
-    } catch {
-      // ignore
+    } catch (err) {
+      showMeetingCreateError(err);
     }
-  }, [activeWorkspaceId, newRoomName, m.newRoom, handleJoinMeeting]);
+  }, [activeWorkspaceId, newRoomName, newRoomProjectId, m.newRoom, handleJoinMeeting, fetchProjectParticipantIds, showMeetingCreateError]);
 
   const handleEndMeeting = useCallback(async (meetingId: string) => {
     if (!confirm(m.endMeetingConfirm)) return;
@@ -213,7 +371,7 @@ export function MeetingsPage() {
   }, [m.endMeetingConfirm]);
 
   const handleScheduleMeeting = useCallback(async () => {
-    if (!activeWorkspaceId || !scheduleDateVal) return;
+    if (!activeWorkspaceId || !scheduleDateVal || !scheduleProjectId) return;
     const title = scheduleTitle.trim() || m.scheduleMeeting;
     const time = scheduleTimeVal ?? new Time(9, 0);
     // CalendarDate + Time → ISO в локальной TZ
@@ -225,22 +383,29 @@ export function MeetingsPage() {
       time.minute,
     );
     try {
+      const participantIds = await fetchProjectParticipantIds(
+        activeWorkspaceId,
+        scheduleProjectId,
+      );
       await api.createMeeting({
         workspaceId: activeWorkspaceId,
+        projectId: scheduleProjectId,
         title,
-        meetingType: "scheduled",
+        meetingType: "video_call",
         scheduledAt: dt.toISOString(),
         durationMinutes: 30,
+        participantIds,
       });
       setScheduleTitle("");
+      setScheduleProjectId("");
       setScheduleDateVal(null);
       setScheduleTimeVal(null);
       setScheduleOpen(false);
       setRefreshKey((k) => k + 1);
-    } catch {
-      // ignore
+    } catch (err) {
+      showMeetingCreateError(err);
     }
-  }, [activeWorkspaceId, scheduleDateVal, scheduleTimeVal, scheduleTitle, m.scheduleMeeting]);
+  }, [activeWorkspaceId, scheduleDateVal, scheduleTimeVal, scheduleTitle, scheduleProjectId, m.scheduleMeeting, fetchProjectParticipantIds, showMeetingCreateError]);
 
   const sidebar = (
     <div className="flex min-h-0 w-full min-w-0 flex-col gap-2 overflow-hidden sm:gap-3">
@@ -342,7 +507,7 @@ export function MeetingsPage() {
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-xs font-medium sm:text-sm">{row.title}</span>
                   <span className="mt-0.5 block text-[10px] text-[var(--muted)] sm:text-xs">
-                    {formatMeetingTime(row.scheduledAt)} · {row.status}
+                    {formatMeetingTime(row.scheduledAt)} · {formatMeetingStatus(row.status)}
                   </span>
                 </span>
               </button>
@@ -358,7 +523,7 @@ export function MeetingsPage() {
 
   return (
     <section className="flex min-h-0 w-full flex-1 flex-col">
-      <div className="mx-auto flex w-full max-w-[1400px] flex-1 flex-col gap-4 py-4 sm:gap-5 sm:py-5">
+      <div className="mr-auto flex w-full max-w-[1080px] flex-1 flex-col gap-4 py-4 sm:gap-5 sm:py-5">
         <motion.header
           initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
@@ -396,7 +561,10 @@ export function MeetingsPage() {
           open={newRoomOpen}
           onOpenChange={(o) => {
             setNewRoomOpen(o);
-            if (!o) setNewRoomName("");
+            if (!o) {
+              setNewRoomName("");
+              setNewRoomProjectId("");
+            }
           }}
         >
           <DialogContent from="top">
@@ -414,6 +582,19 @@ export function MeetingsPage() {
                   aria-label={m.newRoomNameLabel}
                 />
               </div>
+              <div className="grid gap-1.5">
+                <Label className="text-sm font-medium text-[var(--foreground)]">{m.projectLabel}</Label>
+                <ProjectSelect
+                  value={newRoomProjectId}
+                  onChange={setNewRoomProjectId}
+                  projects={projects}
+                  placeholder={projects.length === 0 ? m.noProjectsHint : m.projectPlaceholder}
+                  disabled={projects.length === 0}
+                />
+                <p className="m-0 text-[11px] text-[var(--muted)]">
+                  {newRoomProjectId ? m.projectMembersInfo : m.projectRequired}
+                </p>
+              </div>
             </div>
             <DialogFooter>
               <DialogClose asChild>
@@ -425,7 +606,7 @@ export function MeetingsPage() {
                 variant="primary"
                 size="sm"
                 onPress={() => void handleCreateInstantRoom()}
-                isDisabled={!activeWorkspaceId}
+                isDisabled={!activeWorkspaceId || !newRoomProjectId}
               >
                 {m.newRoomSubmit}
               </Button>
@@ -439,6 +620,7 @@ export function MeetingsPage() {
             setScheduleOpen(o);
             if (!o) {
               setScheduleTitle("");
+              setScheduleProjectId("");
               setScheduleDateVal(null);
               setScheduleTimeVal(null);
             }
@@ -458,6 +640,19 @@ export function MeetingsPage() {
                   placeholder={m.newRoomNamePlaceholder}
                   aria-label={m.newRoomNameLabel}
                 />
+              </div>
+              <div className="grid min-w-0 gap-1.5">
+                <Label className="text-sm font-medium text-[var(--foreground)]">{m.projectLabel}</Label>
+                <ProjectSelect
+                  value={scheduleProjectId}
+                  onChange={setScheduleProjectId}
+                  projects={projects}
+                  placeholder={projects.length === 0 ? m.noProjectsHint : m.projectPlaceholder}
+                  disabled={projects.length === 0}
+                />
+                <p className="m-0 text-[11px] text-[var(--muted)]">
+                  {scheduleProjectId ? m.projectMembersInfo : m.projectRequired}
+                </p>
               </div>
             </div>
             <div className="grid gap-4 py-1 sm:grid-cols-2">
@@ -498,7 +693,7 @@ export function MeetingsPage() {
                 variant="primary"
                 size="sm"
                 onPress={() => void handleScheduleMeeting()}
-                isDisabled={!activeWorkspaceId || !scheduleDateVal}
+                isDisabled={!activeWorkspaceId || !scheduleDateVal || !scheduleProjectId}
               >
                 {m.scheduleSubmit}
               </Button>

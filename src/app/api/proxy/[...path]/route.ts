@@ -169,8 +169,18 @@ async function handle(
   // браузерный поток не сломался.
   const bearer = access ? null : extractBearer(req);
 
+  // Некоторые бэкенд-эндпоинты не требуют аутентификации (публичные).
+  // Такие запросы пропускаем напрямую без Bearer-токена.
+  const PUBLIC_BACKEND_PREFIXES = [
+    "/project-invitations/token/",
+  ];
+  const isPublicEndpoint = PUBLIC_BACKEND_PREFIXES.some((p) =>
+    `/${segments}`.startsWith(p),
+  );
+
   // Если клиент вообще не авторизован — сразу 401, не дёргаем бэкенд.
-  if (!access && !refresh && !bearer) {
+  // Исключение: публичные эндпоинты, которые можно вызывать анонимно.
+  if (!access && !refresh && !bearer && !isPublicEndpoint) {
     return NextResponse.json(
       {
         success: false,
