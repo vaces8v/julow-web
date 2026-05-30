@@ -21,7 +21,7 @@ interface BackendAuthorizeResponse {
  *    подсунуть произвольный callback URL и украсть OAuth-код.
  *
  * Параметры:
- *  - provider:     "google" | "github" (без `oauth_` префикса — добавим сами)
+ *  - provider:     "google" | "github" | "yandex" (без `oauth_` префикса — добавим сами)
  *  - redirect_uri: URL, на который провайдер вернёт юзера. Обычно
  *                  `${origin}/oauth/callback`. Должен совпадать с тем,
  *                  что зарегистрирован в консоли провайдера.

@@ -1,6 +1,7 @@
 "use client";
 
 import { useId } from "react";
+import Link from "next/link";
 import { useI18n } from "@/i18n/context";
 import { UserShield01Icon } from "hugeicons-react";
 
@@ -93,6 +94,7 @@ function AppleIcon() {
 const OAUTH_PROVIDERS = [
   { id: "google" as const, labelKey: "oauthGoogle" as const, Icon: GoogleIcon },
   { id: "github" as const, labelKey: "oauthGithub" as const, Icon: GitHubIcon },
+  { id: "yandex" as const, labelKey: "oauthYandex" as const, Icon: YandexIcon },
 ];
 
 /**
@@ -115,7 +117,7 @@ const OAUTH_PROVIDERS = [
  * `next` сохраняется в sessionStorage и подмешивается в callback после
  * успешного логина (если backend не примет — фоллбэк на /workspace).
  */
-async function startOAuth(provider: "google" | "github") {
+async function startOAuth(provider: "google" | "github" | "yandex") {
   if (typeof window === "undefined") return;
 
   // Куда вернуть юзера после успешного OAuth — сохраняем в sessionStorage,
@@ -246,7 +248,9 @@ export function QrLoginStub() {
           })}
         </div>
       </div>
-      <p className="mt-2 text-[11px] text-[var(--muted)]/70">{a.qrCompactPreview}</p>
+      <Link href="/login/qr" className="mt-2 block text-center text-[11px] font-medium text-accent hover:underline">
+        {a.signInWithQrTitle}
+      </Link>
     </div>
   );
 }
