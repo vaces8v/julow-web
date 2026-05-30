@@ -1,6 +1,5 @@
 "use client";
 
-import { useId } from "react";
 import Link from "next/link";
 import { useI18n } from "@/i18n/context";
 import { UserShield01Icon } from "hugeicons-react";
@@ -26,52 +25,26 @@ export function GitHubIcon() {
   );
 }
 
-/** Yandex tile: separate light/dark gradients, inner rim, «Я» shifted right for optical center. */
-function YandexIcon() {
-  const uid = useId().replace(/:/g, "");
-  const gradLight = `yandex-l-${uid}`;
-  const gradDark = `yandex-d-${uid}`;
-
+/** Official Yandex app icon paths (yastatic.net, 2021 brand) — same as mobile. */
+export function YandexIcon() {
   return (
     <svg
       width="18"
       height="18"
       viewBox="0 0 24 24"
-      fill="none"
+      preserveAspectRatio="xMidYMid meet"
       xmlns="http://www.w3.org/2000/svg"
       aria-hidden
-      className="shrink-0 [filter:drop-shadow(0_1px_2px_oklch(55%_0.14_28_/_0.26))] dark:[filter:drop-shadow(0_1px_3px_oklch(0%_0_0_/_0.55))]"
+      className="shrink-0"
     >
-      <defs>
-        <linearGradient id={gradLight} x1="5" y1="2" x2="19" y2="22" gradientUnits="userSpaceOnUse">
-          <stop stopColor="#FF7358" />
-          <stop offset="0.42" stopColor="#FC3F1D" />
-          <stop offset="1" stopColor="#D42108" />
-        </linearGradient>
-        <linearGradient id={gradDark} x1="3" y1="1" x2="21" y2="23" gradientUnits="userSpaceOnUse">
-          <stop stopColor="#FF9078" />
-          <stop offset="0.38" stopColor="#EF3514" />
-          <stop offset="1" stopColor="#8E1404" />
-        </linearGradient>
-      </defs>
-      <rect width="24" height="24" rx="5.5" fill={`url(#${gradLight})`} className="dark:hidden" />
-      <rect width="24" height="24" rx="5.5" fill={`url(#${gradDark})`} className="hidden dark:block" />
-      <rect
-        x="0.5"
-        y="0.5"
-        width="23"
-        height="23"
-        rx="5"
-        fill="none"
-        className="stroke-white/30 dark:stroke-white/14"
-        strokeWidth="1"
+      <path
+        d="M2.04 12c0-5.523 4.476-10 10-10 5.522 0 10 4.477 10 10s-4.478 10-10 10c-5.524 0-10-4.477-10-10z"
+        fill="#FC3F1D"
       />
-      <g transform="translate(0.72, 0)">
-        <path
-          d="M13.34 20H11.04V13.08H9.67L6.6 20H4.2l3.36-7.37C6.07 12.02 5.1 10.6 5.1 8.55 5.1 5.64 7.04 4 10.06 4H13.34V20ZM11.04 6.2H10C8.38 6.2 7.4 7.15 7.4 8.55c0 1.4.98 2.33 2.6 2.33H11.04V6.2Z"
-          fill="#FEFEFE"
-        />
-      </g>
+      <path
+        d="M13.32 7.666h-.924c-1.694 0-2.585.858-2.585 2.123 0 1.43.616 2.1 1.881 2.959l1.045.704-3.003 4.487H7.49l2.695-4.014c-1.55-1.111-2.42-2.19-2.42-4.015 0-2.288 1.595-3.85 4.62-3.85h3.003v11.868H13.32V7.666z"
+        fill="#FFFFFF"
+      />
     </svg>
   );
 }
@@ -84,17 +57,11 @@ function AppleIcon() {
   );
 }
 
-/**
- * Активные провайдеры OAuth. Раньше держали 4-ой набор (Google, GitHub,
- * Yandex, Apple) в сетке 2×2, но по продуктовому решению оставляем
- * только Google и GitHub — два самых востребованных для нашей аудитории.
- * Yandex/Apple-иконки оставлены в файле как готовые компоненты на
- * случай возврата (без runtime-стоимости — tree-shake уберёт неиспользуемое).
- */
+/** Активные OAuth-провайдеры (порядок как в mobile: Google → Yandex → GitHub). */
 const OAUTH_PROVIDERS = [
   { id: "google" as const, labelKey: "oauthGoogle" as const, Icon: GoogleIcon },
-  { id: "github" as const, labelKey: "oauthGithub" as const, Icon: GitHubIcon },
   { id: "yandex" as const, labelKey: "oauthYandex" as const, Icon: YandexIcon },
+  { id: "github" as const, labelKey: "oauthGithub" as const, Icon: GitHubIcon },
 ];
 
 /**

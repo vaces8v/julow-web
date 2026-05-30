@@ -11,9 +11,9 @@ import {
   type ReactNode,
 } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { LiveKitRoom, RoomAudioRenderer } from "@livekit/components-react";
+import { LiveKitRoom, RoomAudioRenderer, useRoomContext } from "@livekit/components-react";
 import "@livekit/components-styles";
-import { DisconnectReason, VideoPresets } from "livekit-client";
+import { DisconnectReason, RoomEvent, VideoPresets } from "livekit-client";
 import { toast } from "@/components/ui/toast";
 import { useI18n } from "@/i18n/context";
 import { api } from "@/lib/api";
@@ -79,7 +79,6 @@ export function LiveMeetingProvider({ children }: { children: ReactNode }) {
   const [justLeft, setJustLeft] = useState(false);
   const intentionalLeaveRef = useRef(false);
   const lastMeetingIdRef = useRef<string | null>(null);
-
   const resetMeetingState = useCallback(() => {
     setMeetingId(null);
     setToken(null);
@@ -176,8 +175,9 @@ export function LiveMeetingProvider({ children }: { children: ReactNode }) {
         onDisconnected={handleDisconnected}
         style={{ display: "contents" }}
         options={{
-          adaptiveStream: true,
+          adaptiveStream: { pixelDensity: "screen" },
           dynacast: true,
+          disconnectOnPageLeave: false,
           audioCaptureDefaults: {
             autoGainControl: true,
             echoCancellation: true,
@@ -195,8 +195,35 @@ export function LiveMeetingProvider({ children }: { children: ReactNode }) {
         }}
       >
         {isConnected && <RoomAudioRenderer />}
+        {isConnected ? <MeetingRoomLifecycle /> : null}
         {children}
       </LiveKitRoom>
     </LiveMeetingCtx.Provider>
   );
+}
+
+function MeetingRoomLifecycle() {
+  const room = useRoomContext();
+  const { t } = useI18n();
+  const m = t.meetings;
+
+  useEffect(() => {
+    if (!room) return;
+
+    const onReconnecting = () => {
+      toast.info(m.reconnectingTitle, { id: "livekit-reconnecting", duration: 4000 });
+    };
+    const onReconnected = () => {
+      toast.success(m.reconnectedTitle, { id: "livekit-reconnected", duration: 2500 });
+    };
+
+    room.on(RoomEvent.Reconnecting, onReconnecting);
+    room.on(RoomEvent.Reconnected, onReconnected);
+    return () => {
+      room.off(RoomEvent.Reconnecting, onReconnecting);
+      room.off(RoomEvent.Reconnected, onReconnected);
+    };
+  }, [room, m.reconnectedTitle, m.reconnectingTitle]);
+
+  return null;
 }

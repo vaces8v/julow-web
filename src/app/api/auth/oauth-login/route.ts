@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 /**
  * POST /api/auth/oauth-login
  *
- * Завершает OAuth-flow: после того как провайдер (Google/GitHub) вернул
+ * Завершает OAuth-flow: после того как провайдер (Google/GitHub/Yandex) вернул
  * пользователя на `/oauth/callback?code=...&provider=...`, callback-страница
  * POST'ит сюда тело `{ provider, code, redirectUri, isRememberMe }`.
  *
@@ -24,8 +24,8 @@ export const dynamic = "force-dynamic";
  *   3. Кладём токены в httpOnly cookies (тот же путь, что и обычный login),
  *      браузеру отдаём только { user }.
  *
- * Provider-имя приходит как "google" или "github" — backend ожидает
- * полные коды `oauth_google`/`oauth_github`, поэтому добавляем префикс.
+ * Provider-имя приходит как "google" | "github" | "yandex" — backend ожидает
+ * полные коды `oauth_*`, поэтому добавляем префикс при необходимости.
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const body = (await req.json().catch(() => null)) as
@@ -50,7 +50,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     );
   }
 
-  // Backend кодирует провайдеры как "oauth_google" / "oauth_github".
+  // Backend кодирует провайдеры как "oauth_google" / "oauth_github" / "oauth_yandex".
   // Нормализуем — префикс уже мог быть передан, не дублируем его.
   const providerCode = body.provider.startsWith("oauth_")
     ? body.provider

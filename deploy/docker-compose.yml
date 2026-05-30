@@ -134,7 +134,7 @@ services:
       # Auth / JWT — ОБЯЗАТЕЛЬНО смените в production.
       AUTH_JWT_SECRET_KEY: ${AUTH_JWT_SECRET_KEY:-change-me-in-production}
       AUTH_ACCESS_TOKEN_EXPIRE_MINUTES: "30"
-      AUTH_REFRESH_TOKEN_EXPIRE_DAYS: "7"
+      AUTH_REFRESH_TOKEN_EXPIRE_DAYS: "365"
 
       # Encryption — ОБЯЗАТЕЛЬНО сгенерируйте новый Fernet ключ для prod.
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-AAmioAjwB55kaBoOrZYZHrbnv21GCNdcPAxCgwJDs8s=}
